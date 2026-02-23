@@ -1,0 +1,67 @@
+services:
+  # Avahi mDNS Service Discovery
+  avahi:
+    image: flungo/avahi
+    container_name: avahi-mdns
+    network_mode: host
+    environment:
+      - SERVER_HOST_NAME=health-monitor
+      - AVAHI_SERVICES=http:8000:tcp
+    volumes:
+      - /var/run/dbus:/var/run/dbus
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-SecurePassword2026!}
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wearable-backend
+    network_mode: host
+    environment:
+      - MONGO_URI=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-SecurePassword2026!}@localhost:27017
+      - MONGO_DB=${MONGO_DB:-wearable}
+      - DEVICE_TOKEN_SECRET=${DEVICE_TOKEN_SECRET:-change-this-device-token-secret}
+      - API_KEY=${API_KEY:-change-this-api-key}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://app.eldercare.io.vn,https://admin.eldercare.io.vn,http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000}
+      - CORS_ALLOW_ORIGIN_REGEX=${CORS_ALLOW_ORIGIN_REGEX-}
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_GENERAL_PER_MINUTE=${RATE_LIMIT_GENERAL_PER_MINUTE:-300}
+      - RATE_LIMIT_ESP_PER_MINUTE=${RATE_LIMIT_ESP_PER_MINUTE:-1200}
+      - COMMAND_TTL_SECONDS=${COMMAND_TTL_SECONDS:-300}
+      - EXPOSE_API_DOCS=${EXPOSE_API_DOCS:-false}
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+
+  nodered:
+    image: nodered/node-red:latest
+    container_name: nodered
+    network_mode: host
+    environment:
+      - TZ=UTC
+    volumes:
+      - nodered_data:/data
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+    profiles:
+      - tools
+
+volumes:
+  nodered_data:
+  mongodb_data:
+  mongodb_config:

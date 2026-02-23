@@ -1,0 +1,20 @@
+# Secrets
+.env
+backend/.env
+
+# Local Python environments / IDE deps
+backend/.venv/
+backend/.pydeps/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Runtime artifacts
+logs/
+backups/
+mongodb_data/
+mongodb_config/
+
+# Editor artifacts
+.vscode/

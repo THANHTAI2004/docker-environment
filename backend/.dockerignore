@@ -1,0 +1,16 @@
+# Keep secrets and local tooling out of image layers.
+.env
+.env.*
+
+# Local Python environments/deps (IDE only)
+.venv
+.pydeps
+
+# Python caches
+__pycache__/
+*.pyc
+
+# VCS / editor artifacts
+.git
+.gitignore
+.vscode

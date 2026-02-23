@@ -1,0 +1,99 @@
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-SecurePassword2026!}
+    ports:
+      - "${MONGO_BIND_IP:-127.0.0.1}:${MONGO_HOST_PORT:-27017}:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: wearable-backend
+    environment:
+      - MONGO_URI=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-SecurePassword2026!}@mongodb:27017
+      - MONGO_DB=wearable
+      - DEVICE_TOKEN_SECRET=${DEVICE_TOKEN_SECRET:-change-this-device-token-secret}
+      - API_KEY=${API_KEY:-change-this-api-key}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://app.eldercare.io.vn,https://admin.eldercare.io.vn,http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000}
+      - CORS_ALLOW_ORIGIN_REGEX=${CORS_ALLOW_ORIGIN_REGEX-}
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_GENERAL_PER_MINUTE=${RATE_LIMIT_GENERAL_PER_MINUTE:-300}
+      - RATE_LIMIT_ESP_PER_MINUTE=${RATE_LIMIT_ESP_PER_MINUTE:-1200}
+      - COMMAND_TTL_SECONDS=${COMMAND_TTL_SECONDS:-300}
+      - EXPOSE_API_DOCS=${EXPOSE_API_DOCS:-false}
+    ports:
+      - "${BACKEND_BIND_IP:-127.0.0.1}:${BACKEND_HOST_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - cloudflare
+
+  cloudflared-quick:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-quick
+    command: tunnel --no-autoupdate --url http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - cloudflare-quick
+
+  nodered:
+    image: nodered/node-red:latest
+    container_name: nodered
+    environment:
+      - TZ=UTC
+    ports:
+      - "${NODERED_BIND_IP:-127.0.0.1}:${NODERED_HOST_PORT:-1880}:1880"
+    volumes:
+      - nodered_data:/data
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1880/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    profiles:
+      - tools
+
+volumes:
+  nodered_data:
+  mongodb_data:
+  mongodb_config:
