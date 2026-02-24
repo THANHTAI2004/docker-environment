@@ -425,6 +425,7 @@ curl -sS "$BASE_URL/api/v1/users/dev-user-001/ecg?limit=10" \
 
 ## 13) Tài liệu liên quan
 
+- `FLUTTER_SERVER_INTEGRATION.md`
 - `API_CONTRACT_PROD.md`
 - `SERVER_SPEC.md`
 - `DATA_FLOW.md`
