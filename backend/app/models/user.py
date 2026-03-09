@@ -34,6 +34,7 @@ class AlertThresholds(BaseModel):
     
     # Heart rate
     hr_low: Optional[int] = 50
+    hr_low_critical: Optional[int] = 40
     hr_high: Optional[int] = 120
     hr_critical: Optional[int] = 150
     
@@ -94,6 +95,7 @@ class ThresholdsUpdate(BaseModel):
     temp_critical: Optional[float] = None
     temp_low: Optional[float] = None
     hr_low: Optional[int] = None
+    hr_low_critical: Optional[int] = None
     hr_high: Optional[int] = None
     hr_critical: Optional[int] = None
     rr_low: Optional[int] = None

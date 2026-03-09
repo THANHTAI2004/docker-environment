@@ -5,6 +5,7 @@ REST API + MongoDB for health data management.
 import logging
 import time
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, status, Depends
@@ -85,8 +86,26 @@ class RequestRateLimiter:
 rate_limiter = RequestRateLimiter()
 
 
+# ===== Startup/Shutdown Lifespan =====
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Initialize and teardown application resources."""
+    logger.info("Starting Wearable Health Monitoring Backend...")
+    db.connect()
+    await db.create_indexes()
+    logger.info("MongoDB connected and indexes created")
+    logger.info("REST ingestion is enabled for ESP devices")
+    yield
+    # Shutdown: close MongoDB connection
+    if db.client:
+        db.client.close()
+        logger.info("MongoDB connection closed")
+
+
 # FastAPI app with enhanced metadata
 app = FastAPI(
+    lifespan=lifespan,
     title="Wearable Health Monitoring API",
     description="""
     Backend service for elderly health monitoring with wearable devices.
@@ -154,13 +173,12 @@ async def rate_limit_middleware(request: Request, call_next):
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors with detailed messages."""
     logger.warning(f"Validation error on {request.url}: {exc.errors()}")
+    content = {"detail": exc.errors(), "message": "Invalid request data"}
+    if settings.expose_error_details:
+        content["body"] = exc.body
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={
-            "detail": exc.errors(),
-            "body": exc.body,
-            "message": "Invalid request data"
-        },
+        content=content,
     )
 
 @app.exception_handler(Exception)
@@ -193,20 +211,6 @@ class Reading(BaseModel):
     heart_rate: Optional[float] = None
     temperature: Optional[float] = None
     raw: Optional[dict] = None
-
-
-# ===== Startup/Shutdown Events =====
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database connection."""
-    logger.info("Starting Wearable Health Monitoring Backend...")
-
-    # Connect to MongoDB
-    db.connect()
-    await db.create_indexes()
-    logger.info("MongoDB connected and indexes created")
-    logger.info("REST ingestion is enabled for ESP devices")
 
 
 # ===== Health Check Endpoint =====

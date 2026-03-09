@@ -1,4 +1,4 @@
-# Wearable Health Monitoring Backend
+﻿# Wearable Health Monitoring Backend
 
 Tài liệu này mô tả hệ thống server trong repo `docker-environment`, theo đúng cấu trúc 15 mục yêu cầu để phục vụ team backend, firmware (ESP32) và app Flutter/Web.
 
@@ -474,4 +474,8 @@ Hướng cải tiến sau này:
 3. Thiết lập CI/CD (lint, test, build image, deploy).
 4. Chuyển rate-limit/state dùng Redis khi mở rộng nhiều instance.
 5. Bổ sung observability chuẩn: metrics, tracing, cảnh báo tự động.
+<<<<<<< HEAD
 6. Chuẩn hóa runbook production cho backup/restore/disaster recovery.
+=======
+6. Chuẩn hóa runbook production cho backup/restore/disaster recovery.
+>>>>>>> 493551b (Cap nhat server va tai lieu)
