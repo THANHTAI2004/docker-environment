@@ -3,87 +3,43 @@ FastAPI backend for wearable health monitoring system.
 REST API + MongoDB for health data management.
 """
 import logging
-import time
-from collections import defaultdict
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 
 # Import modular components
 from .config import settings
-from .utils.auth import require_admin_api_key, require_api_key
 from .db import db
+from .observability import (
+    DB_PING_FAILURES,
+    PENDING_COMMANDS,
+    RATE_LIMIT_HITS,
+    REQUEST_COUNT,
+    REQUEST_LATENCY,
+    configure_logging,
+    metrics_content_type,
+    metrics_payload,
+    reset_request_id,
+    set_request_id,
+)
+from .utils.access import ensure_device_access
+from .utils.auth import require_admin_principal, require_current_user
+from .utils.rate_limit import RateLimiter
 
 # Import API routers
-from .api import health_router, alerts_router, devices_router, users_router, esp_router
+from .api import auth_router, health_router, alerts_router, devices_router, users_router, esp_router
 
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+configure_logging(settings.log_json)
 logger = logging.getLogger(__name__)
-
-
-class RequestRateLimiter:
-    """Simple in-memory per-IP rate limiter with separate ESP/general buckets."""
-
-    def __init__(self):
-        self._counts: dict[tuple[str, int, str], int] = defaultdict(int)
-
-    def _client_ip(self, request: Request) -> str:
-        # Cloudflare and proxies usually provide original client IP in these headers.
-        cf_ip = request.headers.get("cf-connecting-ip")
-        if cf_ip:
-            return cf_ip.strip()
-
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            return xff.split(",")[0].strip()
-
-        x_real_ip = request.headers.get("x-real-ip")
-        if x_real_ip:
-            return x_real_ip.strip()
-
-        return request.client.host if request.client else "unknown"
-
-    def check(self, request: Request) -> tuple[bool, int]:
-        if not settings.rate_limit_enabled:
-            return True, 0
-
-        path = request.url.path
-        if path in {"/health", "/live", "/ready"}:
-            return True, 0
-
-        category = "esp" if path.startswith("/api/v1/esp/") else "general"
-        limit = (
-            settings.rate_limit_esp_per_minute
-            if category == "esp"
-            else settings.rate_limit_general_per_minute
-        )
-
-        now_min = int(time.time() // 60)
-        ip = self._client_ip(request)
-        key = (ip, now_min, category)
-        self._counts[key] += 1
-        remaining = max(limit - self._counts[key], 0)
-
-        # Opportunistic cleanup to keep memory bounded.
-        old_min = now_min - 2
-        stale_keys = [k for k in self._counts if k[1] < old_min]
-        for stale in stale_keys:
-            self._counts.pop(stale, None)
-
-        return self._counts[key] <= limit, remaining
-
-
-rate_limiter = RequestRateLimiter()
+rate_limiter = RateLimiter()
 
 
 # ===== Startup/Shutdown Lifespan =====
@@ -93,11 +49,13 @@ async def lifespan(application: FastAPI):
     """Initialize and teardown application resources."""
     logger.info("Starting Wearable Health Monitoring Backend...")
     db.connect()
+    await rate_limiter.connect()
     await db.create_indexes()
     logger.info("MongoDB connected and indexes created")
     logger.info("REST ingestion is enabled for ESP devices")
     yield
     # Shutdown: close MongoDB connection
+    await rate_limiter.close()
     if db.client:
         db.client.close()
         logger.info("MongoDB connection closed")
@@ -154,16 +112,42 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    token = set_request_id(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        reset_request_id(token)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    allowed, remaining = rate_limiter.check(request)
+    allowed, remaining, category = await rate_limiter.check(request)
     if not allowed:
+        RATE_LIMIT_HITS.labels(category=category).inc()
+        REQUEST_COUNT.labels(
+            method=request.method,
+            path=request.url.path,
+            status_code=str(status.HTTP_429_TOO_MANY_REQUESTS),
+        ).inc()
+        logger.warning("Rate limit exceeded for path=%s category=%s", request.url.path, category)
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             content={"message": "Too many requests"},
             headers={"Retry-After": "60"},
         )
 
-    response = await call_next(request)
+    with REQUEST_LATENCY.labels(method=request.method, path=request.url.path).time():
+        response = await call_next(request)
+    REQUEST_COUNT.labels(
+        method=request.method,
+        path=request.url.path,
+        status_code=str(response.status_code),
+    ).inc()
     if settings.rate_limit_enabled:
         response.headers["X-RateLimit-Remaining"] = str(remaining)
     return response
@@ -195,10 +179,11 @@ async def general_exception_handler(request: Request, exc: Exception):
     )
 
 # Include API routers
-app.include_router(health_router, dependencies=[Depends(require_api_key)])
-app.include_router(alerts_router, dependencies=[Depends(require_api_key)])
-app.include_router(devices_router, dependencies=[Depends(require_api_key)])
-app.include_router(users_router, dependencies=[Depends(require_api_key)])
+app.include_router(auth_router)
+app.include_router(health_router)
+app.include_router(alerts_router)
+app.include_router(devices_router)
+app.include_router(users_router)
 app.include_router(esp_router)
 
 
@@ -234,6 +219,8 @@ async def live_check():
 async def readiness_check():
     """Readiness endpoint that fails when the database is unavailable."""
     db_ok = await db.ping()
+    if not db_ok:
+        DB_PING_FAILURES.inc()
     payload = _readiness_payload(db_ok)
     return JSONResponse(
         status_code=status.HTTP_200_OK if db_ok else status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -247,10 +234,17 @@ async def health_check():
     return await readiness_check()
 
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    PENDING_COMMANDS.set(await db.count_pending_commands())
+    return Response(content=metrics_payload(), media_type=metrics_content_type())
+
+
 # ===== Legacy API Endpoints (Backwards Compatibility) =====
 
 @app.post("/readings")
-async def post_reading(r: Reading, _: None = Depends(require_admin_api_key)):
+async def post_reading(r: Reading, _: dict = Depends(require_admin_principal)):
     """
     Post a sensor reading (legacy endpoint for backwards compatibility).
     """
@@ -266,10 +260,15 @@ async def post_reading(r: Reading, _: None = Depends(require_admin_api_key)):
 
 
 @app.get("/history/{device_id}")
-async def get_history(device_id: str, limit: int = 100, _: None = Depends(require_api_key)):
+async def get_history(
+    device_id: str,
+    limit: int = 100,
+    current_user: dict = Depends(require_current_user),
+):
     """
     Get historical readings for a device (legacy endpoint).
     """
+    await ensure_device_access(current_user, device_id)
     items = await db.get_legacy_readings_by_device(device_id, limit)
     
     return {

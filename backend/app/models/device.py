@@ -3,7 +3,7 @@ Device data models.
 """
 from datetime import datetime
 from typing import Optional, Dict, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DeviceMetadata(BaseModel):
@@ -29,9 +29,8 @@ class Device(BaseModel):
 class DeviceDB(Device):
     """Device as stored in database."""
     id: Optional[str] = Field(None, alias="_id")
-    
-    class Config:
-        populate_by_name = True
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class DeviceRegistration(BaseModel):

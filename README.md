@@ -30,22 +30,24 @@ Mô hình tổng thể của hệ thống:
 ESP32 (X-Device-Token)
     -> FastAPI Backend (wearable-backend)
         -> MongoDB (mongodb)
-Flutter/Web/Admin (X-API-Key)
+        -> Redis (rate limit)
+Flutter/Web/Admin (JWT Bearer)
     -> FastAPI Backend
 ```
 
 Các thành phần chính:
 - Backend: FastAPI (`backend/app`).
 - Database: MongoDB.
-- Cache: chưa có service cache riêng.
+- Rate limit/cache: Redis.
 - Queue: sử dụng collection MongoDB `device_commands` (không dùng Redis/RabbitMQ).
 - Proxy/Tunnel: Cloudflare Tunnel (optional), Nginx config mẫu.
 - Container: Docker Compose.
 
 Cách các thành phần giao tiếp với nhau:
 - ESP32 -> Backend: HTTPS REST + `X-Device-Token`.
-- App/Web -> Backend: HTTPS REST + `X-API-Key`.
+- App/Web -> Backend: HTTPS REST + `Authorization: Bearer <JWT>`.
 - Backend -> MongoDB: Motor async driver.
+- Backend -> Redis: Redis async client cho rate limit.
 - Cloudflare/Nginx (nếu bật) đứng trước backend làm public endpoint/reverse proxy.
 
 ## 3. Công nghệ sử dụng
@@ -68,7 +70,7 @@ Docker, cloud, CI/CD nếu có:
 - Production override (`docker-compose.prod.yml`)
 - Network mode compose (`docker-compose.network.yml`)
 - Cloudflare Tunnel (`cloudflared`, `cloudflared-quick`)
-- CI/CD: hiện chưa có file pipeline trong repo
+- CI/CD: GitHub Actions tối thiểu tại `.github/workflows/ci.yml`
 
 Ví dụ stack hiện tại:
 - Python + FastAPI
@@ -155,10 +157,10 @@ pip install -r requirements.txt
 
 Biến môi trường cần thiết:
 - Mongo: `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD`, `MONGO_HOST_PORT`, `MONGO_BIND_IP`
-- API/Auth: `API_KEY`, `ADMIN_API_KEY`, `DEVICE_TOKEN_SECRET`
+- API/Auth: `API_KEY`, `ADMIN_API_KEY`, `DEVICE_TOKEN_SECRET`, `JWT_SECRET`
 - Backend: `BACKEND_HOST_PORT`, `BACKEND_BIND_IP`, `EXPOSE_API_DOCS`
 - CORS: `CORS_ALLOW_ORIGINS`, `CORS_ALLOW_ORIGIN_REGEX`
-- Rate-limit: `RATE_LIMIT_ENABLED`, `RATE_LIMIT_GENERAL_PER_MINUTE`, `RATE_LIMIT_ESP_PER_MINUTE`
+- Rate-limit: `RATE_LIMIT_ENABLED`, `RATE_LIMIT_STORAGE`, `REDIS_URL`, `RATE_LIMIT_GENERAL_PER_MINUTE`, `RATE_LIMIT_ESP_PER_MINUTE`
 - Command queue: `COMMAND_TTL_SECONDS`
 - Cloudflare (optional): `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARE_PUBLIC_URL`
 
@@ -168,8 +170,8 @@ Port chạy:
 - Node-RED (optional): `${NODERED_BIND_IP}:${NODERED_HOST_PORT}` (mặc định `127.0.0.1:1880`)
 
 Key/token:
-- `X-API-Key` cho app/admin.
-- Endpoint mutation nhạy cảm yêu cầu `ADMIN_API_KEY` qua cùng header `X-API-Key`.
+- `Authorization: Bearer <JWT>` cho app/admin.
+- `ADMIN_API_KEY` là bootstrap/break-glass secret cho một số endpoint admin-only.
 - `X-Device-Token` cho ESP.
 - Token thiết bị được hash (`sha256(secret:token)`) trước khi lưu vào DB.
 
@@ -179,7 +181,8 @@ Config database:
 
 Config bảo mật:
 - CORS whitelist + regex.
-- Rate limit theo IP/phút.
+- JWT + RBAC (`admin / caregiver / patient`) cho app/admin.
+- Redis-backed rate limit theo JWT subject / API key / device.
 - API docs mặc định tắt (`EXPOSE_API_DOCS=false`).
 
 ## 7. Cách khởi động server
@@ -226,6 +229,8 @@ docker compose logs -f backend
 Các endpoint chính:
 
 App/Admin (`/api/v1`):
+- `POST /auth/login`
+- `GET /auth/me`
 - `POST /users`
 - `GET /users/{user_id}`
 - `PATCH /users/{user_id}/thresholds`
@@ -246,8 +251,9 @@ App/Admin (`/api/v1`):
 - `POST /health/readings` (test/manual ingest)
 
 Ghi chú quyền:
-- Endpoint admin-only: `POST /users`, `PATCH /users/{user_id}/thresholds`, `POST /devices/register`, `POST /devices/{device_id}/esp-token`, `POST /devices/{device_id}/ecg/request`, `POST /health/readings`, `POST /readings`
-- Endpoint read-only hiện vẫn dùng `API_KEY` hoặc `ADMIN_API_KEY`
+- Endpoint bootstrap/break-glass admin: `POST /users`, `POST /devices/register`, `POST /devices/{device_id}/esp-token`, `POST /devices/{device_id}/commands/{command_id}/cancel`, `POST /health/readings`, `POST /readings`
+- App/Web thường dùng JWT Bearer cho đọc dữ liệu và request ECG.
+- RBAC: `admin` xem toàn bộ, `patient` chỉ xem dữ liệu của chính mình, `caregiver` chỉ xem patient được gán.
 
 ESP (`/api/v1/esp`):
 - `POST /devices/{device_id}/readings`
@@ -282,13 +288,14 @@ POST /api/v1/esp/devices/dev-001/readings
 ```
 
 Xác thực:
-- App/Admin: bắt buộc header `X-API-Key`.
-- Các endpoint admin/mutation nhạy cảm chỉ chấp nhận `ADMIN_API_KEY`.
+- App/Admin: JWT Bearer qua `Authorization`.
+- Một số endpoint admin-only hỗ trợ `ADMIN_API_KEY` làm bootstrap/break-glass.
 - ESP: bắt buộc header `X-Device-Token`.
 
 Mã lỗi thường gặp:
 - `400`: request hợp lệ cú pháp nhưng sai logic nghiệp vụ
-- `401`: thiếu/sai API key hoặc device token
+- `401`: thiếu/sai bearer token, admin key hoặc device token
+- `403`: đúng danh tính nhưng không đủ quyền/ownership
 - `404`: không tìm thấy tài nguyên/dữ liệu
 - `422`: lỗi validation payload
 - `429`: vượt rate limit
@@ -357,14 +364,16 @@ Trả kết quả về client thế nào:
 ## 11. Bảo mật
 
 Authentication / authorization:
-- `X-API-Key` cho API app/admin.
+- JWT Bearer cho app/admin.
+- `ADMIN_API_KEY` cho bootstrap/break-glass admin.
 - `X-Device-Token` cho API ESP.
-- Chưa có JWT/RBAC theo user role ở bản hiện tại.
+- RBAC theo `admin / caregiver / patient`.
+- Ownership check giữa `user_id` và `device_id`.
 
 API key, JWT, token thiết bị:
-- API key: static shared secret qua env `API_KEY`.
-- Admin key: env `ADMIN_API_KEY` cho mutation nhạy cảm.
-- JWT: chưa triển khai.
+- API key: env `API_KEY` chỉ dùng cho compatibility nội bộ nếu cần.
+- Admin key: env `ADMIN_API_KEY` cho bootstrap/break-glass.
+- JWT: access token ký bằng `JWT_SECRET`.
 - Device token: cấp qua endpoint rotate token, lưu dưới dạng hash trong DB.
 
 CORS:
@@ -375,7 +384,7 @@ Mã hóa dữ liệu nếu có:
 - TLS/HTTPS phụ thuộc lớp reverse proxy/tunnel (Cloudflare/Nginx).
 
 Giới hạn truy cập:
-- Rate limit theo IP và theo nhóm route (general/esp).
+- Rate limit Redis-backed theo JWT subject / API key / device.
 - Header phản hồi có `X-RateLimit-Remaining`, khi vượt giới hạn trả `429`.
 
 ## 12. Logging và giám sát
@@ -399,6 +408,7 @@ Health check:
 - Liveness: `GET /live`
 - Readiness: `GET /ready` hoặc `GET /health` và sẽ trả `503` khi DB lỗi
 - Docker healthcheck đã cấu hình cho backend dùng `/ready` và mongodb dùng ping nội bộ.
+- Metrics: `GET /metrics`
 
 Debug lỗi:
 - Kiểm tra `docker compose ps`.
@@ -407,6 +417,7 @@ Debug lỗi:
 
 Monitoring nếu có:
 - `scripts/monitor.sh` kiểm tra health endpoint, trạng thái container, disk usage.
+- Prometheus có thể scrape `/metrics`.
 
 ## 13. Triển khai và vận hành
 
@@ -468,19 +479,17 @@ Lỗi WSL/dev environment nếu có:
 Ưu điểm hiện tại:
 - Kiến trúc tách lớp khá rõ (api/service/db/models/utils).
 - Hỗ trợ đầy đủ ingest + ECG on-demand queue polling.
-- Có index, TTL, healthcheck, rate-limit cơ bản.
+- Có index, TTL, readiness, JWT/RBAC cơ bản, request ID, metrics, rate-limit Redis-backed.
 - Có script vận hành (backup/restore/monitor/deploy cloudflare).
 
 Hạn chế:
-- Chưa có JWT/RBAC cho user-level authorization.
-- Rate-limit đang in-memory, không phù hợp scale multi-instance.
-- Queue dùng Mongo đơn giản, chưa có retry worker chuyên dụng.
-- Chưa có CI/CD và bộ test tự động rõ ràng trong repo.
+- Queue vẫn dùng Mongo polling nên hợp với small/medium scale hơn broker chuyên dụng.
+- Chưa có refresh token/session revocation.
+- Dashboard/alerting hạ tầng vẫn cần triển khai ngoài repo.
 
 Hướng cải tiến sau này:
-1. Thêm JWT + RBAC và cơ chế xoay key/token định kỳ.
-2. Bổ sung test unit/integration cho endpoint chính và luồng ECG command.
-3. Thiết lập CI/CD (lint, test, build image, deploy).
-4. Chuyển rate-limit/state dùng Redis khi mở rộng nhiều instance.
-5. Bổ sung observability chuẩn: metrics, tracing, cảnh báo tự động.
-6. Chuẩn hóa runbook production cho backup/restore/disaster recovery.
+1. Thêm refresh token/session revocation và MFA cho admin.
+2. Mở rộng test integration với Mongo/Redis thật trong CI.
+3. Bổ sung alerting/dashboard production cho metrics và audit log.
+4. Cân nhắc broker riêng nếu queue command tăng tải mạnh.
+5. Chuẩn hóa runbook production cho backup/restore/disaster recovery.

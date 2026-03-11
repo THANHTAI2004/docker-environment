@@ -6,7 +6,8 @@ from typing import Optional
 from ..db import db
 from ..models import HealthReading
 from ..services import health_service
-from ..utils.auth import require_admin_api_key
+from ..utils.access import ensure_user_access
+from ..utils.auth import require_admin_principal, require_current_user
 
 
 router = APIRouter(prefix="/api/v1", tags=["health"])
@@ -18,9 +19,11 @@ async def get_vitals(
     device_id: Optional[str] = None,
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
-    limit: int = Query(default=100, le=1000)
+    limit: int = Query(default=100, le=1000),
+    current_user: dict = Depends(require_current_user),
 ):
     """Get vital signs for a user."""
+    await ensure_user_access(current_user, user_id)
     items = await db.get_health_readings(
         user_id=user_id,
         device_id=device_id,
@@ -37,8 +40,13 @@ async def get_vitals(
 
 
 @router.get("/users/{user_id}/latest")
-async def get_latest_user_vitals(user_id: str, device_id: Optional[str] = None):
+async def get_latest_user_vitals(
+    user_id: str,
+    device_id: Optional[str] = None,
+    current_user: dict = Depends(require_current_user),
+):
     """Get latest reading for a user (optionally filtered by device)."""
+    await ensure_user_access(current_user, user_id)
     item = await db.get_latest_user_reading(user_id=user_id, device_id=device_id)
     if not item:
         raise HTTPException(status_code=404, detail="No data found")
@@ -48,10 +56,12 @@ async def get_latest_user_vitals(user_id: str, device_id: Optional[str] = None):
 @router.get("/users/{user_id}/ecg")
 async def get_ecg(
     user_id: str,
-    quality_filter: Optional[str] = Query(None, regex="^(good|fair|poor)$"),
-    limit: int = Query(default=10, le=100)
+    quality_filter: Optional[str] = Query(None, pattern="^(good|fair|poor)$"),
+    limit: int = Query(default=10, le=100),
+    current_user: dict = Depends(require_current_user),
 ):
     """Get ECG waveform data for a user."""
+    await ensure_user_access(current_user, user_id)
     items = await db.get_ecg_readings(
         user_id=user_id,
         quality_filter=quality_filter,
@@ -68,9 +78,11 @@ async def get_ecg(
 @router.get("/users/{user_id}/summary")
 async def get_summary(
     user_id: str,
-    period: str = Query(default="24h", regex="^(1h|6h|24h|7d|30d)$")
+    period: str = Query(default="24h", pattern="^(1h|6h|24h|7d|30d)$"),
+    current_user: dict = Depends(require_current_user),
 ):
     """Get health summary statistics for a period."""
+    await ensure_user_access(current_user, user_id)
     # Calculate time range
     import time
     periods = {
@@ -129,14 +141,14 @@ async def get_summary(
             "respiratory_rate": calc_stats(rr_values)
         },
         "total_readings": len(items),
-        "data_coverage": round(len(items) / (periods[period] / 60) * 100, 2) if periods[period] >= 3600 else 100
+        "reading_density_per_hour": round(len(items) / (periods[period] / 3600), 2),
     }
 
 
 @router.post("/health/readings")
 async def post_health_reading(
     reading: HealthReading,
-    _: None = Depends(require_admin_api_key),
+    _: dict = Depends(require_admin_principal),
 ):
     """Manually post a health reading (for testing)."""
     reading_dict = reading.model_dump(exclude_none=True)

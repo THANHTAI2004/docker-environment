@@ -3,7 +3,7 @@ Alert data models.
 """
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Alert(BaseModel):
@@ -25,12 +25,11 @@ class Alert(BaseModel):
 class AlertDB(Alert):
     """Alert as stored in database."""
     id: Optional[str] = Field(None, alias="_id")
-    
-    class Config:
-        populate_by_name = True
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class AlertAcknowledge(BaseModel):
     """Alert acknowledgment request."""
-    acknowledged_by: str
+    acknowledged_by: Optional[str] = None
     notes: Optional[str] = None

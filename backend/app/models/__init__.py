@@ -5,6 +5,7 @@ from .health import HealthReading, HealthReadingDB, ECGData, LocationData
 from .alert import Alert, AlertDB, AlertAcknowledge
 from .device import Device, DeviceDB, DeviceRegistration, ECGRequestCommand, ESPCommandAck
 from .user import User, UserDB, UserCreate, ThresholdsUpdate, AlertThresholds
+from .auth import AuthenticatedUser, LoginRequest, TokenResponse
 
 __all__ = [
     "HealthReading",
@@ -24,4 +25,7 @@ __all__ = [
     "UserCreate",
     "ThresholdsUpdate",
     "AlertThresholds",
+    "AuthenticatedUser",
+    "LoginRequest",
+    "TokenResponse",
 ]

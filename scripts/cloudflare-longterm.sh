@@ -39,13 +39,13 @@ echo "Containers:"
 docker compose ps backend mongodb cloudflared
 
 echo "Checking local API..."
-docker compose exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+docker compose exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"
 echo "Local API is healthy."
 
 if [ -n "${CLOUDFLARE_PUBLIC_URL:-}" ]; then
-  echo "Checking public API: ${CLOUDFLARE_PUBLIC_URL}/health"
+  echo "Checking public API: ${CLOUDFLARE_PUBLIC_URL}/ready"
   for _ in $(seq 1 20); do
-    if curl -fsS "${CLOUDFLARE_PUBLIC_URL}/health" >/dev/null; then
+    if curl -fsS "${CLOUDFLARE_PUBLIC_URL}/ready" >/dev/null; then
       echo "Public API is healthy."
       exit 0
     fi

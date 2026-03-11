@@ -16,9 +16,9 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 BACKEND_HOST_PORT="${BACKEND_HOST_PORT:-8000}"
-HEALTH_URL="${HEALTH_URL:-http://localhost:${BACKEND_HOST_PORT}/health}"
+HEALTH_URL="${HEALTH_URL:-http://localhost:${BACKEND_HOST_PORT}/ready}"
 if [ -n "${CLOUDFLARE_PUBLIC_URL:-}" ]; then
-  HEALTH_URL="${CLOUDFLARE_PUBLIC_URL%/}/health"
+  HEALTH_URL="${CLOUDFLARE_PUBLIC_URL%/}/ready"
 fi
 
 LOG_FILE="/home/tai/docker-environment/logs/health_monitor.log"

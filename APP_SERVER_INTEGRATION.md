@@ -12,7 +12,7 @@ Tài liệu này mô tả chi tiết cách tích hợp ứng dụng (Flutter/Web
 
 ```text
 App (Flutter/Web)
-  -> HTTPS REST + X-API-Key
+  -> HTTPS REST + Authorization: Bearer <JWT>
   -> FastAPI Backend
   -> MongoDB
 ```
@@ -27,7 +27,7 @@ Biến môi trường tối thiểu:
 
 ```env
 API_BASE_URL=https://api.example.com
-API_KEY=replace-with-api-key
+JWT_ACCESS_TOKEN=<login-response-access-token>
 ADMIN_API_KEY=replace-with-admin-api-key
 USER_ID=user-001
 DEVICE_ID=dev-esp-001
@@ -35,20 +35,22 @@ REQUEST_TIMEOUT_MS=15000
 POLL_INTERVAL_MS=2000
 ```
 
-Headers bắt buộc cho App/Admin API:
+Headers bắt buộc cho App API:
 
 ```http
-X-API-Key: <API_KEY>
+Authorization: Bearer <JWT_ACCESS_TOKEN>
 Content-Type: application/json
 ```
 
 Quy ước quyền:
-- `API_KEY`: dùng cho endpoint đọc dữ liệu.
-- `ADMIN_API_KEY`: dùng cho endpoint mutation nhạy cảm như tạo user, register device, update thresholds, rotate ESP token, request ECG.
+- JWT Bearer: dùng cho app/web/admin sau khi login.
+- `ADMIN_API_KEY`: chỉ dùng cho bootstrap/break-glass ở một số endpoint admin-only.
 
 ## 4. Danh sách endpoint App cần dùng
 
 ## 4.1 User
+- `POST /api/v1/auth/login`
+- `GET /api/v1/auth/me`
 - `POST /api/v1/users`
 - `GET /api/v1/users/{user_id}`
 - `PATCH /api/v1/users/{user_id}/thresholds`
@@ -73,7 +75,6 @@ Endpoint admin-only:
 - `POST /api/v1/users`
 - `PATCH /api/v1/users/{user_id}/thresholds`
 - `POST /api/v1/devices/register`
-- `POST /api/v1/devices/{device_id}/ecg/request`
 
 ## 4.4 Alerts
 - `GET /api/v1/users/{user_id}/alerts`
@@ -82,9 +83,10 @@ Endpoint admin-only:
 ## 5. Luồng dữ liệu chính cho App
 
 Luồng vitals thường:
-1. App gọi `GET /users/{user_id}/latest` để cập nhật realtime.
-2. App gọi `GET /users/{user_id}/vitals` để lấy danh sách biểu đồ.
-3. App gọi `GET /users/{user_id}/summary` để hiển thị số liệu tổng hợp.
+1. App gọi `POST /auth/login` để lấy JWT.
+2. App gọi `GET /users/{user_id}/latest` để cập nhật realtime.
+3. App gọi `GET /users/{user_id}/vitals` để lấy danh sách biểu đồ.
+4. App gọi `GET /users/{user_id}/summary` để hiển thị số liệu tổng hợp.
 
 Luồng ECG on-demand:
 1. App gọi `POST /devices/{device_id}/ecg/request`.
@@ -93,6 +95,17 @@ Luồng ECG on-demand:
 4. App polling `GET /users/{user_id}/ecg` để nhận kết quả ECG mới.
 
 ## 6. Request/response mẫu
+
+## 6.0 Login lấy JWT
+
+```bash
+curl -X POST "$BASE_URL/api/v1/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "user-001",
+    "password": "VeryStrongPassword"
+  }'
+```
 
 ## 6.1 Tạo user
 
@@ -103,7 +116,8 @@ curl -X POST "$BASE_URL/api/v1/users" \
   -d '{
     "user_id": "user-001",
     "name": "Nguyen Van A",
-    "role": "patient"
+    "role": "patient",
+    "password": "VeryStrongPassword"
   }'
 ```
 
@@ -120,7 +134,7 @@ Response:
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/devices/dev-esp-001/ecg/request" \
-  -H "X-API-Key: $ADMIN_API_KEY" \
+  -H "Authorization: Bearer $JWT_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user-001",
@@ -145,7 +159,7 @@ Response mẫu:
 
 ```bash
 curl -X GET "$BASE_URL/api/v1/users/user-001/ecg?limit=5" \
-  -H "X-API-Key: $API_KEY"
+  -H "Authorization: Bearer $JWT_ACCESS_TOKEN"
 ```
 
 ## 7. Ví dụ tích hợp Flutter (Dio)
@@ -173,7 +187,7 @@ class ApiClient {
         connectTimeout: Duration(milliseconds: timeoutMs),
         receiveTimeout: Duration(milliseconds: timeoutMs),
         headers: {
-          'X-API-Key': dotenv.env['API_KEY']!,
+          'Authorization': 'Bearer ${dotenv.env['JWT_ACCESS_TOKEN']!}',
           'Content-Type': 'application/json',
         },
       ),
@@ -203,9 +217,8 @@ class AdminApiClient {
 
 ```dart
 class HealthApiService {
-  HealthApiService(this._dio, this._adminDio);
+  HealthApiService(this._dio);
   final Dio _dio;
-  final Dio _adminDio;
 
   Future<Map<String, dynamic>> getLatest(String userId) async {
     final res = await _dio.get('/api/v1/users/$userId/latest');
@@ -224,7 +237,7 @@ class HealthApiService {
     String deviceId,
     String userId,
   ) async {
-    final res = await _adminDio.post(
+    final res = await _dio.post(
       '/api/v1/devices/$deviceId/ecg/request',
       data: {
         'user_id': userId,
@@ -270,14 +283,16 @@ Future<Map<String, dynamic>?> waitForEcg(
 ## 9. Quy tắc xử lý lỗi phía App
 
 Mã lỗi thường gặp:
-- `401`: thiếu/sai API key.
+- `401`: thiếu/sai bearer token.
+- `403`: không đủ quyền hoặc sai ownership.
 - `404`: chưa có dữ liệu cho user/device.
 - `422`: request body sai schema.
 - `429`: vượt rate limit.
 - `500`: lỗi nội bộ backend.
 
 Khuyến nghị UX/Retry:
-- `401`: yêu cầu kiểm tra cấu hình key.
+- `401`: yêu cầu login lại hoặc kiểm tra token.
+- `403`: báo user không có quyền truy cập resource này.
 - `404`: hiển thị trạng thái "chưa có dữ liệu".
 - `429`: backoff + giảm tần suất polling.
 - `5xx/timeout`: retry có giới hạn số lần.
@@ -299,9 +314,9 @@ Sau đó truy cập:
 
 ## 11. Checklist QA kết nối App-Server
 
-1. App gửi đúng `X-API-Key` cho mọi request `/api/v1/*`.
+1. App login thành công và gửi đúng `Authorization: Bearer <JWT>` cho request dữ liệu.
 2. `GET /ready` hoạt động trước khi test chức năng.
-3. App dùng `ADMIN_API_KEY` đúng cho các endpoint admin-only.
+3. App dùng `ADMIN_API_KEY` đúng cho các endpoint admin-only nếu cần bootstrap.
 4. Luồng ingest từ ESP đã có dữ liệu trước khi test màn hình latest/vitals.
 5. Luồng ECG request -> poll result chạy end-to-end thành công.
 6. Kiểm tra trường hợp lỗi 401/403/404/422/429/500 có thông báo rõ ràng.

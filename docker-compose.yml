@@ -1,4 +1,16 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: wearable-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_BIND_IP:-127.0.0.1}:${REDIS_HOST_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   mongodb:
     image: mongo:latest
     container_name: mongodb
@@ -28,11 +40,14 @@ services:
       - DEVICE_TOKEN_SECRET=${DEVICE_TOKEN_SECRET:?DEVICE_TOKEN_SECRET is required}
       - API_KEY=${API_KEY:?API_KEY is required}
       - ADMIN_API_KEY=${ADMIN_API_KEY:?ADMIN_API_KEY is required}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://app.eldercare.io.vn,https://admin.eldercare.io.vn,http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000}
       - CORS_ALLOW_ORIGIN_REGEX=${CORS_ALLOW_ORIGIN_REGEX-}
       - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_STORAGE=${RATE_LIMIT_STORAGE:-redis}
       - RATE_LIMIT_GENERAL_PER_MINUTE=${RATE_LIMIT_GENERAL_PER_MINUTE:-300}
       - RATE_LIMIT_ESP_PER_MINUTE=${RATE_LIMIT_ESP_PER_MINUTE:-1200}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - COMMAND_TTL_SECONDS=${COMMAND_TTL_SECONDS:-300}
       - EXPOSE_API_DOCS=${EXPOSE_API_DOCS:-false}
     ports:
@@ -41,6 +56,8 @@ services:
       - ./backend:/app
     depends_on:
       mongodb:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:

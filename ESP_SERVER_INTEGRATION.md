@@ -77,6 +77,7 @@ Lưu ý:
 - Server chỉ trả token plain text đúng 1 lần tại thời điểm rotate.
 - Trong DB chỉ lưu hash token (`esp_token_hash`).
 - Hai endpoint chuẩn bị thiết bị ở mục 5 là admin-only, không dùng `API_KEY` đọc dữ liệu thông thường.
+- App/request ECG phía người dùng cuối đã chuyển sang JWT Bearer + RBAC.
 
 ## 6. API ESP chi tiết
 

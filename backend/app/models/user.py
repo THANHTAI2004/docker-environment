@@ -2,8 +2,8 @@
 User data models.
 """
 from datetime import datetime
-from typing import Optional, List, Dict
-from pydantic import BaseModel, Field, EmailStr
+from typing import Optional, List, Dict, Literal
+from pydantic import BaseModel, ConfigDict, Field, EmailStr
 
 
 class EmergencyContact(BaseModel):
@@ -49,9 +49,10 @@ class User(BaseModel):
     name: str
     age: Optional[int] = None
     gender: Optional[str] = None
-    role: str = Field(..., description="patient or caregiver")
+    role: Literal["admin", "caregiver", "patient"] = Field(..., description="admin, caregiver, or patient")
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    is_active: bool = True
     
     # Health profile (for patients)
     health_profile: Optional[HealthProfile] = None
@@ -71,20 +72,21 @@ class User(BaseModel):
 class UserDB(User):
     """User as stored in database."""
     id: Optional[str] = Field(None, alias="_id")
-    
-    class Config:
-        populate_by_name = True
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class UserCreate(BaseModel):
     """User creation request."""
     user_id: str
     name: str
-    role: str
+    role: Literal["admin", "caregiver", "patient"]
+    password: str = Field(..., min_length=8)
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     age: Optional[int] = None
     gender: Optional[str] = None
+    caregivers: List[str] = Field(default_factory=list)
 
 
 class ThresholdsUpdate(BaseModel):

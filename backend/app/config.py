@@ -4,7 +4,7 @@ All settings can be overridden via environment variables.
 """
 from urllib.parse import urlsplit
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     api_key: str = "dev-api-key"
     admin_api_key: str = "change-this-admin-api-key"
     device_token_secret: str = "change-this-device-token-secret"
+    jwt_secret: str = "change-this-jwt-secret"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_exp_minutes: int = 60
     cors_allow_origins: str = (
         "https://app.eldercare.io.vn,"
         "https://admin.eldercare.io.vn,"
@@ -22,10 +25,13 @@ class Settings(BaseSettings):
     )
     cors_allow_origin_regex: str = ""
     rate_limit_enabled: bool = True
+    rate_limit_storage: str = "redis"
     rate_limit_general_per_minute: int = 300
     rate_limit_esp_per_minute: int = 1200
+    redis_url: str = "redis://redis:6379/0"
     expose_error_details: bool = False
     expose_api_docs: bool = False
+    log_json: bool = True
     
     # MongoDB Configuration
     mongo_uri: str = "mongodb://admin:change-this-mongo-password@mongodb:27017"
@@ -38,7 +44,13 @@ class Settings(BaseSettings):
     mongo_devices_collection: str = "devices"
     mongo_users_collection: str = "users"
     mongo_commands_collection: str = "device_commands"
+    mongo_audit_collection: str = "audit_logs"
     command_ttl_seconds: int = 300
+    command_ack_timeout_seconds: int = 45
+    command_max_dispatch_count: int = 3
+    command_max_pending_per_device: int = 3
+    command_dedupe_window_seconds: int = 20
+    alert_dedupe_window_seconds: int = 120
     
     # Health Monitoring Alert Thresholds (defaults)
     # SpO2
@@ -64,10 +76,11 @@ class Settings(BaseSettings):
     ecg_quality_alert: bool = True
     ecg_lead_off_alert: bool = True
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     def validate_runtime_secrets(self) -> None:
         """Fail fast when runtime secrets are missing or left at placeholders."""
@@ -79,8 +92,12 @@ class Settings(BaseSettings):
             invalid.append("ADMIN_API_KEY")
         if self.device_token_secret in {"", "change-this-device-token-secret"}:
             invalid.append("DEVICE_TOKEN_SECRET")
+        if self.jwt_secret in {"", "change-this-jwt-secret"}:
+            invalid.append("JWT_SECRET")
         if self.admin_api_key == self.api_key:
             invalid.append("ADMIN_API_KEY must differ from API_KEY")
+        if self.jwt_secret in {self.api_key, self.admin_api_key, self.device_token_secret}:
+            invalid.append("JWT_SECRET must differ from API_KEY, ADMIN_API_KEY, DEVICE_TOKEN_SECRET")
 
         mongo_password = urlsplit(self.mongo_uri).password or ""
         if mongo_password in {"", "change-this-mongo-password", "SecurePassword2026!"}:

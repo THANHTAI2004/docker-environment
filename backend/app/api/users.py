@@ -1,31 +1,47 @@
 """
 User management REST API endpoints.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from ..db import db
 from ..models import UserCreate, ThresholdsUpdate
-from ..utils.auth import require_admin_api_key
+from ..utils.access import ensure_user_access
+from ..utils.auth import hash_password, require_admin_principal, require_current_user
 
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
 
 @router.post("/users")
-async def create_user(user: UserCreate, _: None = Depends(require_admin_api_key)):
+async def create_user(
+    user: UserCreate,
+    request: Request,
+    principal: dict = Depends(require_admin_principal),
+):
     """Create a new user."""
     user_dict = user.model_dump(exclude_none=True)
+    user_dict["password_hash"] = hash_password(user.password)
+    user_dict.pop("password", None)
     success = await db.create_user(user_dict)
     
     if not success:
         raise HTTPException(status_code=400, detail="User creation failed (may already exist)")
+    await db.insert_audit_log(
+        {
+            "action": "user.create",
+            "actor_id": principal["user_id"],
+            "actor_role": principal["role"],
+            "target_id": user.user_id,
+            "request_id": request.state.request_id,
+        }
+    )
     
     return {"status": "success", "user_id": user.user_id}
 
 
 @router.get("/users/{user_id}")
-async def get_user(user_id: str):
+async def get_user(user_id: str, current_user: dict = Depends(require_current_user)):
     """Get user profile."""
-    user = await db.get_user(user_id)
+    user = await ensure_user_access(current_user, user_id)
     
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -37,9 +53,11 @@ async def get_user(user_id: str):
 async def update_thresholds(
     user_id: str,
     thresholds: ThresholdsUpdate,
-    _: None = Depends(require_admin_api_key),
+    request: Request,
+    current_user: dict = Depends(require_current_user),
 ):
     """Update user's alert thresholds."""
+    await ensure_user_access(current_user, user_id)
     # Only include non-None values
     threshold_dict = {k: v for k, v in thresholds.model_dump().items() if v is not None}
     
@@ -50,5 +68,16 @@ async def update_thresholds(
     
     if not success:
         raise HTTPException(status_code=404, detail="User not found")
+
+    await db.insert_audit_log(
+        {
+            "action": "user.thresholds.update",
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user["role"],
+            "target_id": user_id,
+            "request_id": request.state.request_id,
+            "details": {"updated_fields": sorted(threshold_dict.keys())},
+        }
+    )
     
     return {"status": "success", "user_id": user_id, "updated_thresholds": threshold_dict}
