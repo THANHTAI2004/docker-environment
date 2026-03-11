@@ -2,6 +2,7 @@
 Simple API key auth dependency for FastAPI.
 """
 import hashlib
+import secrets
 
 from fastapi import Header, HTTPException, status
 
@@ -9,14 +10,33 @@ from ..config import settings
 from ..db import db
 
 
+def _matches_secret(provided: str | None, expected: str) -> bool:
+    return bool(provided) and secrets.compare_digest(provided, expected)
+
+
 async def require_api_key(x_api_key: str | None = Header(default=None)):
-    if not settings.api_key:
+    if _matches_secret(x_api_key, settings.api_key):
         return
-    if x_api_key != settings.api_key:
+    if _matches_secret(x_api_key, settings.admin_api_key):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or missing API key",
+    )
+
+
+async def require_admin_api_key(x_api_key: str | None = Header(default=None)):
+    if _matches_secret(x_api_key, settings.admin_api_key):
+        return
+    if not x_api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key",
+            detail="Missing admin API key",
         )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Admin API key required",
+    )
 
 
 def hash_device_token(token: str) -> str:

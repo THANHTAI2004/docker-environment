@@ -44,14 +44,22 @@ class HealthService:
             reading = HealthReading(**reading_data)
             doc = self._normalize_for_storage(reading, reading_data)
 
-            stored = await db.insert_health_reading(doc)
-            if not stored:
+            insert_status = await db.insert_health_reading(doc)
+            if insert_status == "error":
                 logger.error("Failed to insert health reading for %s", reading.device_id)
                 return False
 
             await db.update_device_last_seen(reading.device_id)
             if doc.get("metadata"):
                 await db.update_device_metadata(reading.device_id, doc["metadata"])
+
+            if insert_status == "duplicate":
+                logger.info(
+                    "Skipping alert generation for duplicate reading device=%s seq=%s",
+                    reading.device_id,
+                    doc.get("seq"),
+                )
+                return True
 
             user_thresholds = None
             if doc.get("user_id"):

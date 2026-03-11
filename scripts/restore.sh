@@ -24,8 +24,13 @@ fi
 BACKUP_FILE="$1"
 CONTAINER_NAME="${MONGO_CONTAINER_NAME:-mongodb}"
 MONGO_USER="${MONGO_ROOT_USERNAME:-admin}"
-MONGO_PASS="${MONGO_ROOT_PASSWORD:-mongopassword}"
+MONGO_PASS="${MONGO_ROOT_PASSWORD:-}"
 TEMP_DIR="/tmp/mongo_restore_$$"
+
+if [ -z "$MONGO_PASS" ]; then
+  echo "Mongo root password is required. Set MONGO_ROOT_PASSWORD in $ENV_FILE or the environment."
+  exit 1
+fi
 
 if [ ! -f "$BACKUP_FILE" ]; then
   echo "❌ Error: Backup file not found: $BACKUP_FILE"

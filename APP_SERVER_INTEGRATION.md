@@ -28,6 +28,7 @@ Biến môi trường tối thiểu:
 ```env
 API_BASE_URL=https://api.example.com
 API_KEY=replace-with-api-key
+ADMIN_API_KEY=replace-with-admin-api-key
 USER_ID=user-001
 DEVICE_ID=dev-esp-001
 REQUEST_TIMEOUT_MS=15000
@@ -40,6 +41,10 @@ Headers bắt buộc cho App/Admin API:
 X-API-Key: <API_KEY>
 Content-Type: application/json
 ```
+
+Quy ước quyền:
+- `API_KEY`: dùng cho endpoint đọc dữ liệu.
+- `ADMIN_API_KEY`: dùng cho endpoint mutation nhạy cảm như tạo user, register device, update thresholds, rotate ESP token, request ECG.
 
 ## 4. Danh sách endpoint App cần dùng
 
@@ -62,6 +67,12 @@ Content-Type: application/json
 - `GET /api/v1/devices/{device_id}/latest`
 - `GET /api/v1/devices/{device_id}/history?limit=100`
 - `GET /api/v1/devices/{device_id}/summary?period=24h`
+- `POST /api/v1/devices/{device_id}/ecg/request`
+
+Endpoint admin-only:
+- `POST /api/v1/users`
+- `PATCH /api/v1/users/{user_id}/thresholds`
+- `POST /api/v1/devices/register`
 - `POST /api/v1/devices/{device_id}/ecg/request`
 
 ## 4.4 Alerts
@@ -87,7 +98,7 @@ Luồng ECG on-demand:
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/users" \
-  -H "X-API-Key: $API_KEY" \
+  -H "X-API-Key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user-001",
@@ -109,7 +120,7 @@ Response:
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/devices/dev-esp-001/ecg/request" \
-  -H "X-API-Key: $API_KEY" \
+  -H "X-API-Key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user-001",
@@ -169,14 +180,32 @@ class ApiClient {
     );
   }
 }
+
+class AdminApiClient {
+  static Dio build() {
+    final timeoutMs = int.parse(dotenv.env['REQUEST_TIMEOUT_MS'] ?? '15000');
+    return Dio(
+      BaseOptions(
+        baseUrl: dotenv.env['API_BASE_URL']!,
+        connectTimeout: Duration(milliseconds: timeoutMs),
+        receiveTimeout: Duration(milliseconds: timeoutMs),
+        headers: {
+          'X-API-Key': dotenv.env['ADMIN_API_KEY']!,
+          'Content-Type': 'application/json',
+        },
+      ),
+    );
+  }
+}
 ```
 
 `health_api_service.dart`:
 
 ```dart
 class HealthApiService {
-  HealthApiService(this._dio);
+  HealthApiService(this._dio, this._adminDio);
   final Dio _dio;
+  final Dio _adminDio;
 
   Future<Map<String, dynamic>> getLatest(String userId) async {
     final res = await _dio.get('/api/v1/users/$userId/latest');
@@ -195,7 +224,7 @@ class HealthApiService {
     String deviceId,
     String userId,
   ) async {
-    final res = await _dio.post(
+    final res = await _adminDio.post(
       '/api/v1/devices/$deviceId/ecg/request',
       data: {
         'user_id': userId,
@@ -271,11 +300,12 @@ Sau đó truy cập:
 ## 11. Checklist QA kết nối App-Server
 
 1. App gửi đúng `X-API-Key` cho mọi request `/api/v1/*`.
-2. `GET /health` hoạt động trước khi test chức năng.
-3. Luồng ingest từ ESP đã có dữ liệu trước khi test màn hình latest/vitals.
-4. Luồng ECG request -> poll result chạy end-to-end thành công.
-5. Kiểm tra trường hợp lỗi 401/404/422/429/500 có thông báo rõ ràng.
-6. Log `request_id` khi gọi ECG để truy vết giữa app, server, firmware.
+2. `GET /ready` hoạt động trước khi test chức năng.
+3. App dùng `ADMIN_API_KEY` đúng cho các endpoint admin-only.
+4. Luồng ingest từ ESP đã có dữ liệu trước khi test màn hình latest/vitals.
+5. Luồng ECG request -> poll result chạy end-to-end thành công.
+6. Kiểm tra trường hợp lỗi 401/403/404/422/429/500 có thông báo rõ ràng.
+7. Log `request_id` khi gọi ECG để truy vết giữa app, server, firmware.
 
 ## 12. Troubleshooting nhanh
 

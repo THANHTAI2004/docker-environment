@@ -3,7 +3,7 @@ MongoDB database operations for health monitoring.
 """
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import motor.motor_asyncio
 from pymongo import ReturnDocument
@@ -95,6 +95,11 @@ class Database:
             await self.alerts.create_index([("severity", 1), ("acknowledged", 1)])
             await self.alerts.create_index([("device_id", 1)])
             await self.alerts.create_index([("recorded_at", 1)], expireAfterSeconds=15552000)
+            await self.alerts.create_index(
+                [("device_id", 1), ("seq", 1), ("alert_type", 1)],
+                unique=True,
+                partialFilterExpression={"seq": {"$type": "number"}},
+            )
 
             # Devices
             await self.devices.create_index([("device_id", 1)], unique=True)
@@ -169,10 +174,10 @@ class Database:
 
     # ===== Health reading methods =====
 
-    async def insert_health_reading(self, doc: Dict[str, Any]) -> bool:
+    async def insert_health_reading(self, doc: Dict[str, Any]) -> Literal["inserted", "duplicate", "error"]:
         """Insert one normalized health reading document."""
         if self.health_readings is None:
-            return False
+            return "error"
 
         try:
             doc = dict(doc)
@@ -180,14 +185,14 @@ class Database:
             if "recorded_at" not in doc and doc.get("timestamp"):
                 doc["recorded_at"] = datetime.utcfromtimestamp(float(doc["timestamp"]))
             await self.health_readings.insert_one(doc)
-            return True
+            return "inserted"
         except DuplicateKeyError:
             # Duplicate QoS1 retransmission (same device_id + seq)
             logger.info("Duplicate reading ignored for device=%s seq=%s", doc.get("device_id"), doc.get("seq"))
-            return True
+            return "duplicate"
         except Exception as exc:
             logger.error("Health reading insert error: %s", exc)
-            return False
+            return "error"
 
     async def get_health_readings(
         self,
@@ -306,6 +311,14 @@ class Database:
                 doc["recorded_at"] = datetime.utcfromtimestamp(float(doc["timestamp"]))
             result = await self.alerts.insert_one(doc)
             return str(result.inserted_id)
+        except DuplicateKeyError:
+            logger.info(
+                "Duplicate alert ignored for device=%s seq=%s type=%s",
+                doc.get("device_id"),
+                doc.get("seq"),
+                doc.get("alert_type"),
+            )
+            return None
         except Exception as exc:
             logger.error("Alert insert error: %s", exc)
             return None
@@ -571,7 +584,7 @@ class Database:
                 {"user_id": user_id},
                 {"$set": {"alert_thresholds": thresholds}},
             )
-            return result.modified_count > 0
+            return result.matched_count > 0
         except Exception as exc:
             logger.error("User threshold update error: %s", exc)
             return False

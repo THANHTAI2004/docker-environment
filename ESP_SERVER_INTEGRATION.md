@@ -22,7 +22,7 @@ Server (FastAPI)
 
 ## 3. Điều kiện tiên quyết
 
-- Server đã chạy và healthy (`GET /health` trả `status: ok` hoặc `degraded`).
+- Server đã chạy và ready (`GET /ready` hoặc `GET /health` trả HTTP `200`).
 - Device đã được đăng ký trong hệ thống.
 - ESP token đã được cấp cho device.
 
@@ -47,7 +47,7 @@ Content-Type: application/json
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/devices/register" \
-  -H "X-API-Key: $API_KEY" \
+  -H "X-API-Key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "device_id": "dev-esp-001",
@@ -61,7 +61,7 @@ curl -X POST "$BASE_URL/api/v1/devices/register" \
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/devices/dev-esp-001/esp-token" \
-  -H "X-API-Key: $API_KEY"
+  -H "X-API-Key: $ADMIN_API_KEY"
 ```
 
 Response mẫu:
@@ -76,6 +76,7 @@ Response mẫu:
 Lưu ý:
 - Server chỉ trả token plain text đúng 1 lần tại thời điểm rotate.
 - Trong DB chỉ lưu hash token (`esp_token_hash`).
+- Hai endpoint chuẩn bị thiết bị ở mục 5 là admin-only, không dùng `API_KEY` đọc dữ liệu thông thường.
 
 ## 6. API ESP chi tiết
 
@@ -216,6 +217,7 @@ ECG payload:
 
 Dedup retransmit:
 - Server deduplicate theo `(device_id, seq)` khi `seq` là số.
+- Reading retry cùng `seq` sẽ không sinh alert mới.
 - Firmware nên tăng `seq` theo từng reading để đảm bảo idempotency.
 
 ## 9. Mã lỗi thường gặp và cách xử lý

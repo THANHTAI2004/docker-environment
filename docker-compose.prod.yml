@@ -25,7 +25,7 @@ services:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
       interval: 30s
       timeout: 10s
       retries: 3

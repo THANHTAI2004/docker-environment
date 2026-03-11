@@ -20,7 +20,7 @@ Phục vụ app/web/device nào:
 Người dùng hoặc client nào kết nối vào:
 - Thiết bị ESP32 qua `/api/v1/esp/*`.
 - App/Admin qua `/api/v1/*`.
-- Health check nội bộ qua `/health`.
+- Health check nội bộ qua `/live`, `/ready`, `/health`.
 
 ## 2. Tổng quan kiến trúc
 
@@ -155,7 +155,7 @@ pip install -r requirements.txt
 
 Biến môi trường cần thiết:
 - Mongo: `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD`, `MONGO_HOST_PORT`, `MONGO_BIND_IP`
-- API/Auth: `API_KEY`, `DEVICE_TOKEN_SECRET`
+- API/Auth: `API_KEY`, `ADMIN_API_KEY`, `DEVICE_TOKEN_SECRET`
 - Backend: `BACKEND_HOST_PORT`, `BACKEND_BIND_IP`, `EXPOSE_API_DOCS`
 - CORS: `CORS_ALLOW_ORIGINS`, `CORS_ALLOW_ORIGIN_REGEX`
 - Rate-limit: `RATE_LIMIT_ENABLED`, `RATE_LIMIT_GENERAL_PER_MINUTE`, `RATE_LIMIT_ESP_PER_MINUTE`
@@ -169,6 +169,7 @@ Port chạy:
 
 Key/token:
 - `X-API-Key` cho app/admin.
+- Endpoint mutation nhạy cảm yêu cầu `ADMIN_API_KEY` qua cùng header `X-API-Key`.
 - `X-Device-Token` cho ESP.
 - Token thiết bị được hash (`sha256(secret:token)`) trước khi lưu vào DB.
 
@@ -215,7 +216,7 @@ docker compose down
 Cách kiểm tra server đã lên chưa:
 
 ```bash
-curl -sS http://127.0.0.1:8000/health
+curl -sS http://127.0.0.1:8000/ready
 docker compose ps
 docker compose logs -f backend
 ```
@@ -243,6 +244,10 @@ App/Admin (`/api/v1`):
 - `GET /users/{user_id}/alerts`
 - `POST /alerts/{alert_id}/acknowledge`
 - `POST /health/readings` (test/manual ingest)
+
+Ghi chú quyền:
+- Endpoint admin-only: `POST /users`, `PATCH /users/{user_id}/thresholds`, `POST /devices/register`, `POST /devices/{device_id}/esp-token`, `POST /devices/{device_id}/ecg/request`, `POST /health/readings`, `POST /readings`
+- Endpoint read-only hiện vẫn dùng `API_KEY` hoặc `ADMIN_API_KEY`
 
 ESP (`/api/v1/esp`):
 - `POST /devices/{device_id}/readings`
@@ -278,6 +283,7 @@ POST /api/v1/esp/devices/dev-001/readings
 
 Xác thực:
 - App/Admin: bắt buộc header `X-API-Key`.
+- Các endpoint admin/mutation nhạy cảm chỉ chấp nhận `ADMIN_API_KEY`.
 - ESP: bắt buộc header `X-Device-Token`.
 
 Mã lỗi thường gặp:
@@ -357,6 +363,7 @@ Authentication / authorization:
 
 API key, JWT, token thiết bị:
 - API key: static shared secret qua env `API_KEY`.
+- Admin key: env `ADMIN_API_KEY` cho mutation nhạy cảm.
 - JWT: chưa triển khai.
 - Device token: cấp qua endpoint rotate token, lưu dưới dạng hash trong DB.
 
@@ -389,12 +396,14 @@ tail -f logs/health_monitor.log
 
 Health check:
 - API: `GET /health`
-- Docker healthcheck đã cấu hình cho backend và mongodb.
+- Liveness: `GET /live`
+- Readiness: `GET /ready` hoặc `GET /health` và sẽ trả `503` khi DB lỗi
+- Docker healthcheck đã cấu hình cho backend dùng `/ready` và mongodb dùng ping nội bộ.
 
 Debug lỗi:
 - Kiểm tra `docker compose ps`.
 - So log backend/mongodb.
-- Gọi test nhanh endpoint `/health` và endpoint nghiệp vụ.
+- Gọi test nhanh endpoint `/ready` hoặc `/health` và endpoint nghiệp vụ.
 
 Monitoring nếu có:
 - `scripts/monitor.sh` kiểm tra health endpoint, trạng thái container, disk usage.
@@ -474,8 +483,4 @@ Hướng cải tiến sau này:
 3. Thiết lập CI/CD (lint, test, build image, deploy).
 4. Chuyển rate-limit/state dùng Redis khi mở rộng nhiều instance.
 5. Bổ sung observability chuẩn: metrics, tracing, cảnh báo tự động.
-<<<<<<< HEAD
 6. Chuẩn hóa runbook production cho backup/restore/disaster recovery.
-=======
-6. Chuẩn hóa runbook production cho backup/restore/disaster recovery.
->>>>>>> 493551b (Cap nhat server va tai lieu)

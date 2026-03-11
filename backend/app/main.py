@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 # Import modular components
 from .config import settings
-from .utils.auth import require_api_key
+from .utils.auth import require_admin_api_key, require_api_key
 from .db import db
 
 # Import API routers
@@ -58,7 +58,7 @@ class RequestRateLimiter:
             return True, 0
 
         path = request.url.path
-        if path == "/health":
+        if path in {"/health", "/live", "/ready"}:
             return True, 0
 
         category = "esp" if path.startswith("/api/v1/esp/") else "general"
@@ -215,11 +215,8 @@ class Reading(BaseModel):
 
 # ===== Health Check Endpoint =====
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    db_ok = await db.ping()
-
+def _readiness_payload(db_ok: bool) -> dict[str, str]:
+    """Return a stable readiness payload for API and container probes."""
     return {
         "status": "ok" if db_ok else "degraded",
         "database": "connected" if db_ok else "disconnected",
@@ -227,10 +224,33 @@ async def health_check():
     }
 
 
+@app.get("/live")
+async def live_check():
+    """Liveness endpoint that only reports whether the process is running."""
+    return {"status": "alive", "ingest_mode": "rest_api"}
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness endpoint that fails when the database is unavailable."""
+    db_ok = await db.ping()
+    payload = _readiness_payload(db_ok)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if db_ok else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content=payload,
+    )
+
+
+@app.get("/health")
+async def health_check():
+    """Compatibility alias for readiness checks used by monitoring."""
+    return await readiness_check()
+
+
 # ===== Legacy API Endpoints (Backwards Compatibility) =====
 
 @app.post("/readings")
-async def post_reading(r: Reading, _: None = Depends(require_api_key)):
+async def post_reading(r: Reading, _: None = Depends(require_admin_api_key)):
     """
     Post a sensor reading (legacy endpoint for backwards compatibility).
     """

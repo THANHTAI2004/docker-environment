@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-SecurePassword2026!}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD is required}
     ports:
       - "${MONGO_BIND_IP:-127.0.0.1}:${MONGO_HOST_PORT:-27017}:27017"
     volumes:
@@ -23,10 +23,11 @@ services:
       dockerfile: Dockerfile
     container_name: wearable-backend
     environment:
-      - MONGO_URI=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-SecurePassword2026!}@mongodb:27017
+      - MONGO_URI=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:?MONGO_ROOT_PASSWORD is required}@mongodb:27017
       - MONGO_DB=wearable
-      - DEVICE_TOKEN_SECRET=${DEVICE_TOKEN_SECRET:-change-this-device-token-secret}
-      - API_KEY=${API_KEY:-change-this-api-key}
+      - DEVICE_TOKEN_SECRET=${DEVICE_TOKEN_SECRET:?DEVICE_TOKEN_SECRET is required}
+      - API_KEY=${API_KEY:?API_KEY is required}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:?ADMIN_API_KEY is required}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://app.eldercare.io.vn,https://admin.eldercare.io.vn,http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000}
       - CORS_ALLOW_ORIGIN_REGEX=${CORS_ALLOW_ORIGIN_REGEX-}
       - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
@@ -43,7 +44,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
       interval: 30s
       timeout: 10s
       retries: 3

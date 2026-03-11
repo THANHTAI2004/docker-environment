@@ -5,19 +5,19 @@ from datetime import datetime, timedelta
 import secrets
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 import uuid
 
 from ..db import db
 from ..models import DeviceRegistration, ECGRequestCommand
-from ..utils.auth import hash_device_token
+from ..utils.auth import hash_device_token, require_admin_api_key
 from ..config import settings
 
 router = APIRouter(prefix="/api/v1", tags=["devices"])
 
 
 @router.post("/devices/register")
-async def register_device(device: DeviceRegistration):
+async def register_device(device: DeviceRegistration, _: None = Depends(require_admin_api_key)):
     """Register or update one device."""
     device_dict = device.model_dump(exclude_none=True)
     success = await db.register_device(device_dict)
@@ -36,7 +36,11 @@ async def get_device(device_id: str):
 
 
 @router.post("/devices/{device_id}/ecg/request")
-async def request_ecg(device_id: str, command: ECGRequestCommand):
+async def request_ecg(
+    device_id: str,
+    command: ECGRequestCommand,
+    _: None = Depends(require_admin_api_key),
+):
     """Queue ECG command; ESP will receive it via REST polling."""
     device = await db.get_device(device_id)
     if not device:
@@ -77,7 +81,7 @@ async def request_ecg(device_id: str, command: ECGRequestCommand):
 
 
 @router.post("/devices/{device_id}/esp-token")
-async def rotate_esp_token(device_id: str):
+async def rotate_esp_token(device_id: str, _: None = Depends(require_admin_api_key)):
     """Generate and set new ESP token for a device (shown only once)."""
     device = await db.get_device(device_id)
     if not device:

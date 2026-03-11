@@ -18,9 +18,14 @@ fi
 BACKUP_DIR="${BACKUP_DIR:-$PROJECT_ROOT/backups}"
 CONTAINER_NAME="${MONGO_CONTAINER_NAME:-mongodb}"
 MONGO_USER="${MONGO_ROOT_USERNAME:-admin}"
-MONGO_PASS="${MONGO_ROOT_PASSWORD:-mongopassword}"
+MONGO_PASS="${MONGO_ROOT_PASSWORD:-}"
 DATE=$(date +%Y%m%d_%H%M%S)
 BACKUP_NAME=${1:-"backup_$DATE"}
+
+if [ -z "$MONGO_PASS" ]; then
+  echo "Mongo root password is required. Set MONGO_ROOT_PASSWORD in $ENV_FILE or the environment."
+  exit 1
+fi
 
 # Create backup directory if not exists
 mkdir -p "$BACKUP_DIR"

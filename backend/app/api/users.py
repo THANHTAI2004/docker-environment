@@ -1,16 +1,17 @@
 """
 User management REST API endpoints.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from ..db import db
 from ..models import UserCreate, ThresholdsUpdate
+from ..utils.auth import require_admin_api_key
 
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
 
 
 @router.post("/users")
-async def create_user(user: UserCreate):
+async def create_user(user: UserCreate, _: None = Depends(require_admin_api_key)):
     """Create a new user."""
     user_dict = user.model_dump(exclude_none=True)
     success = await db.create_user(user_dict)
@@ -33,7 +34,11 @@ async def get_user(user_id: str):
 
 
 @router.patch("/users/{user_id}/thresholds")
-async def update_thresholds(user_id: str, thresholds: ThresholdsUpdate):
+async def update_thresholds(
+    user_id: str,
+    thresholds: ThresholdsUpdate,
+    _: None = Depends(require_admin_api_key),
+):
     """Update user's alert thresholds."""
     # Only include non-None values
     threshold_dict = {k: v for k, v in thresholds.model_dump().items() if v is not None}

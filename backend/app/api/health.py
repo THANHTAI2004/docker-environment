@@ -1,11 +1,12 @@
 """
 Health data REST API endpoints.
 """
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional
 from ..db import db
 from ..models import HealthReading
 from ..services import health_service
+from ..utils.auth import require_admin_api_key
 
 
 router = APIRouter(prefix="/api/v1", tags=["health"])
@@ -133,7 +134,10 @@ async def get_summary(
 
 
 @router.post("/health/readings")
-async def post_health_reading(reading: HealthReading):
+async def post_health_reading(
+    reading: HealthReading,
+    _: None = Depends(require_admin_api_key),
+):
     """Manually post a health reading (for testing)."""
     reading_dict = reading.model_dump(exclude_none=True)
     success = await health_service.process_health_reading(reading_dict)
