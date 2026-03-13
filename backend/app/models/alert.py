@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field
 class Alert(BaseModel):
     """Health alert."""
     device_id: str
-    user_id: str
     timestamp: float
     alert_type: str = Field(..., description="spo2_low, temp_high, hr_abnormal, etc.")
     severity: str = Field(..., description="info, warning, critical")

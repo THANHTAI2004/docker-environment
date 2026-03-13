@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Optional, Dict, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
+from .user import AlertThresholds
+
 
 class DeviceMetadata(BaseModel):
     """Device metadata."""
@@ -17,13 +19,13 @@ class Device(BaseModel):
     """Wearable device."""
     device_id: str
     device_type: str = Field(..., description="wrist or chest")
-    user_id: Optional[str] = None
     device_name: str
     firmware_version: Optional[str] = None
     registered_at: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     status: str = Field(default="active", description="active, inactive, maintenance")
     metadata: Optional[DeviceMetadata] = None
+    alert_thresholds: Optional[AlertThresholds] = None
 
 
 class DeviceDB(Device):
@@ -38,14 +40,13 @@ class DeviceRegistration(BaseModel):
     device_id: str
     device_type: str
     device_name: Optional[str] = None
-    user_id: Optional[str] = None
     firmware_version: Optional[str] = None
     metadata: Optional[DeviceMetadata] = None
+    alert_thresholds: Optional[AlertThresholds] = None
 
 
 class ECGRequestCommand(BaseModel):
     """ECG capture command issued by app."""
-    user_id: Optional[str] = None
     duration_seconds: int = Field(default=10, ge=3, le=60)
     sampling_rate: int = Field(default=250, ge=100, le=1000)
 

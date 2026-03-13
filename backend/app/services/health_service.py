@@ -61,13 +61,9 @@ class HealthService:
                 )
                 return True
 
-            user_thresholds = None
-            if doc.get("user_id"):
-                user = await db.get_user(doc["user_id"])
-                if user and "alert_thresholds" in user:
-                    user_thresholds = user["alert_thresholds"]
-
-            await alert_service.check_health_reading(doc, user_thresholds)
+            device = await db.get_device(reading.device_id)
+            device_thresholds = device.get("alert_thresholds") if device else None
+            await alert_service.check_health_reading(doc, device_thresholds)
             return True
         except Exception as exc:
             logger.error("Error processing health reading: %s", exc)
@@ -115,8 +111,6 @@ class HealthService:
             "received_at": received_at,
         }
 
-        if reading.user_id:
-            doc["user_id"] = reading.user_id
         if reading.seq is not None:
             doc["seq"] = reading.seq
         if vitals:

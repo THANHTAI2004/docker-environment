@@ -35,11 +35,13 @@ async def ensure_device_access(principal: Dict[str, Any], device_id: str) -> Dic
     if principal.get("role") == "admin":
         return device
 
-    owner_id = device.get("user_id")
-    if not owner_id:
+    actor_user_id = principal.get("user_id")
+    if not actor_user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
-    await ensure_user_access(principal, owner_id)
+    link = await db.get_device_link(device_id, actor_user_id)
+    if not link:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     return device
 
 
@@ -48,7 +50,8 @@ async def ensure_alert_access(principal: Dict[str, Any], alert_id: str) -> Dict[
     alert = await db.get_alert(alert_id)
     if not alert:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
-    await ensure_user_access(principal, alert["user_id"])
+    if principal.get("role") != "admin":
+        await ensure_device_access(principal, alert["device_id"])
     return alert
 
 
@@ -62,7 +65,7 @@ def filter_device_response(device: Dict[str, Any], principal: Dict[str, Any]) ->
         "registered_at": device.get("registered_at"),
         "last_seen": device.get("last_seen"),
         "status": device.get("status"),
-        "user_id": device.get("user_id"),
+        "alert_thresholds": device.get("alert_thresholds"),
     }
     if principal.get("role") == "admin":
         if "metadata" in device:

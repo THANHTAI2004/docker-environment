@@ -33,6 +33,7 @@ class Database:
         self.users = None
         self.device_commands = None
         self.audit_logs = None
+        self.device_links = None
 
     def connect(self):
         """Initialize MongoDB connection and collection references."""
@@ -45,6 +46,7 @@ class Database:
         self.users = self.db[settings.mongo_users_collection]
         self.device_commands = self.db[settings.mongo_commands_collection]
         self.audit_logs = self.db[settings.mongo_audit_collection]
+        self.device_links = self.db[settings.mongo_device_links_collection]
 
     async def _ensure_ttl_index(
         self,
@@ -82,7 +84,6 @@ class Database:
             await self.collection.create_index([("ts", -1)])
 
             # Health readings
-            await self.health_readings.create_index([("user_id", 1), ("timestamp", -1)])
             await self.health_readings.create_index([("device_id", 1), ("timestamp", -1)])
             await self.health_readings.create_index([("device_uid", 1), ("timestamp", -1)])
             await self.health_readings.create_index([("device_type", 1)])
@@ -95,7 +96,6 @@ class Database:
             )
 
             # Alerts
-            await self.alerts.create_index([("user_id", 1), ("timestamp", -1)])
             await self.alerts.create_index([("severity", 1), ("acknowledged", 1)])
             await self.alerts.create_index([("device_id", 1)])
             await self.alerts.create_index([("device_id", 1), ("alert_type", 1), ("timestamp", -1)])
@@ -108,7 +108,6 @@ class Database:
 
             # Devices
             await self.devices.create_index([("device_id", 1)], unique=True)
-            await self.devices.create_index([("user_id", 1)])
             await self.devices.create_index([("status", 1)])
             await self.devices.create_index([("esp_token_hash", 1)], unique=True, sparse=True)
 
@@ -134,6 +133,12 @@ class Database:
             await self.audit_logs.create_index([("action", 1), ("timestamp", -1)])
             await self.audit_logs.create_index([("target_id", 1), ("timestamp", -1)])
 
+            # User-device links
+            await self.device_links.create_index([("device_id", 1), ("user_id", 1)], unique=True)
+            await self.device_links.create_index([("user_id", 1), ("linked_at", -1)])
+            await self.device_links.create_index([("device_id", 1), ("linked_at", -1)])
+            await self.device_links.create_index([("device_id", 1), ("link_role", 1)])
+
             logger.info("MongoDB indexes created successfully")
         except Exception as exc:
             logger.error("Index creation error: %s", exc)
@@ -154,6 +159,8 @@ class Database:
             "expires_at",
             "dispatched_at",
             "completed_at",
+            "linked_at",
+            "updated_at",
         ):
             if isinstance(output.get(field), datetime):
                 output[field] = output[field].isoformat()
@@ -166,7 +173,6 @@ class Database:
         fingerprint = json.dumps(
             {
                 "device_id": payload.get("device_id"),
-                "user_id": payload.get("user_id"),
                 "command": payload.get("command"),
                 "payload": payload.get("payload", {}),
             },
@@ -229,7 +235,7 @@ class Database:
         end_time: Optional[float] = None,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """Query health readings for a user."""
+        """Legacy user-based query kept for backward compatibility."""
         if self.health_readings is None:
             return []
 
@@ -248,6 +254,28 @@ class Database:
             return [self._serialize_doc(doc) async for doc in cursor]
         except Exception as exc:
             logger.error("Health reading query error: %s", exc)
+            return []
+
+    async def get_device_ecg_readings(
+        self,
+        device_id: str,
+        quality_filter: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Query ECG readings for one device."""
+        if self.health_readings is None:
+            return []
+        try:
+            query: Dict[str, Any] = {
+                "$or": [{"device_id": device_id}, {"device_uid": device_id}],
+                "ecg": {"$exists": True, "$ne": None},
+            }
+            if quality_filter:
+                query["ecg.quality"] = quality_filter
+            cursor = self.health_readings.find(query).sort("timestamp", -1).limit(limit)
+            return [self._serialize_doc(doc) async for doc in cursor]
+        except Exception as exc:
+            logger.error("Device ECG query error: %s", exc)
             return []
 
     async def get_readings_by_device(
@@ -390,7 +418,7 @@ class Database:
         acknowledged: Optional[bool] = None,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """Query alert history for a user."""
+        """Legacy user-based alert query kept for backward compatibility."""
         if self.alerts is None:
             return []
         try:
@@ -403,6 +431,28 @@ class Database:
             return [self._serialize_doc(doc) async for doc in cursor]
         except Exception as exc:
             logger.error("Alert query error: %s", exc)
+            return []
+
+    async def get_alerts_by_device(
+        self,
+        device_id: str,
+        severity: Optional[str] = None,
+        acknowledged: Optional[bool] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Query alert history for one device."""
+        if self.alerts is None:
+            return []
+        try:
+            query: Dict[str, Any] = {"device_id": device_id}
+            if severity:
+                query["severity"] = severity
+            if acknowledged is not None:
+                query["acknowledged"] = acknowledged
+            cursor = self.alerts.find(query).sort("timestamp", -1).limit(limit)
+            return [self._serialize_doc(doc) async for doc in cursor]
+        except Exception as exc:
+            logger.error("Device alert query error: %s", exc)
             return []
 
     async def acknowledge_alert(
@@ -542,6 +592,183 @@ class Database:
         except Exception as exc:
             logger.error("Device metadata update error: %s", exc)
             return False
+
+    async def update_device_thresholds(self, device_id: str, thresholds: Dict[str, Any]) -> bool:
+        """Update alert thresholds stored directly on a device."""
+        if self.devices is None:
+            return False
+        try:
+            result = await self.devices.update_one(
+                {"device_id": device_id},
+                {"$set": {"alert_thresholds": thresholds, "last_seen": datetime.utcnow()}},
+            )
+            return result.matched_count > 0
+        except Exception as exc:
+            logger.error("Device threshold update error: %s", exc)
+            return False
+
+    # ===== Device link methods =====
+
+    async def get_device_link(self, device_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """Return one user-device link."""
+        if self.device_links is None:
+            return None
+        try:
+            doc = await self.device_links.find_one({"device_id": device_id, "user_id": user_id})
+            return self._serialize_doc(doc) if doc else None
+        except Exception as exc:
+            logger.error("Device link query error: %s", exc)
+            return None
+
+    async def get_device_owner_link(self, device_id: str) -> Optional[Dict[str, Any]]:
+        """Return the owner link for one device, if any."""
+        if self.device_links is None:
+            return None
+        try:
+            doc = await self.device_links.find_one({"device_id": device_id, "link_role": "owner"})
+            return self._serialize_doc(doc) if doc else None
+        except Exception as exc:
+            logger.error("Device owner link query error: %s", exc)
+            return None
+
+    async def upsert_device_link(
+        self,
+        device_id: str,
+        user_id: str,
+        link_role: str,
+        linked_by: Optional[str],
+    ) -> str:
+        """Create or update one user-device link."""
+        if self.device_links is None:
+            return "error"
+        try:
+            now = datetime.utcnow()
+            existing = await self.device_links.find_one({"device_id": device_id, "user_id": user_id})
+            if existing:
+                await self.device_links.update_one(
+                    {"_id": existing["_id"]},
+                    {
+                        "$set": {
+                            "link_role": link_role,
+                            "linked_by": linked_by,
+                            "updated_at": now,
+                        }
+                    },
+                )
+                return "updated"
+
+            await self.device_links.insert_one(
+                {
+                    "device_id": device_id,
+                    "user_id": user_id,
+                    "link_role": link_role,
+                    "linked_at": now,
+                    "linked_by": linked_by,
+                    "updated_at": now,
+                }
+            )
+            return "linked"
+        except DuplicateKeyError:
+            return "updated"
+        except Exception as exc:
+            logger.error("Device link upsert error: %s", exc)
+            return "error"
+
+    async def delete_device_link(self, device_id: str, user_id: str) -> bool:
+        """Delete one user-device link."""
+        if self.device_links is None:
+            return False
+        try:
+            result = await self.device_links.delete_one({"device_id": device_id, "user_id": user_id})
+            return result.deleted_count > 0
+        except Exception as exc:
+            logger.error("Device link delete error: %s", exc)
+            return False
+
+    async def list_devices_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        """List devices linked to one user with link metadata."""
+        if self.device_links is None or self.devices is None:
+            return []
+        try:
+            links = [
+                self._serialize_doc(doc)
+                async for doc in self.device_links.find({"user_id": user_id}).sort("linked_at", -1)
+            ]
+            if not links:
+                return []
+
+            device_ids = [link["device_id"] for link in links]
+            devices = {
+                doc["device_id"]: self._serialize_doc(doc)
+                async for doc in self.devices.find({"device_id": {"$in": device_ids}})
+            }
+
+            results: List[Dict[str, Any]] = []
+            for link in links:
+                device = devices.get(link["device_id"])
+                if not device:
+                    continue
+                results.append(
+                    {
+                        "device_id": device.get("device_id"),
+                        "device_type": device.get("device_type"),
+                        "device_name": device.get("device_name"),
+                        "firmware_version": device.get("firmware_version"),
+                        "registered_at": device.get("registered_at"),
+                        "last_seen": device.get("last_seen"),
+                        "status": device.get("status"),
+                        "link_role": link.get("link_role"),
+                        "linked_at": link.get("linked_at"),
+                        "linked_by": link.get("linked_by"),
+                    }
+                )
+            return results
+        except Exception as exc:
+            logger.error("List devices for user error: %s", exc)
+            return []
+
+    async def list_users_for_device(self, device_id: str) -> List[Dict[str, Any]]:
+        """List users linked to one device with link metadata."""
+        if self.device_links is None or self.users is None:
+            return []
+        try:
+            links = [
+                self._serialize_doc(doc)
+                async for doc in self.device_links.find({"device_id": device_id}).sort(
+                    [("link_role", 1), ("linked_at", 1)]
+                )
+            ]
+            if not links:
+                return []
+
+            user_ids = [link["user_id"] for link in links]
+            users = {
+                doc["user_id"]: self._serialize_doc(doc)
+                async for doc in self.users.find({"user_id": {"$in": user_ids}})
+            }
+
+            results: List[Dict[str, Any]] = []
+            for link in links:
+                user = users.get(link["user_id"])
+                if not user:
+                    continue
+                results.append(
+                    {
+                        "user_id": user.get("user_id"),
+                        "name": user.get("name"),
+                        "role": user.get("role"),
+                        "email": user.get("email"),
+                        "phone": user.get("phone"),
+                        "is_active": user.get("is_active"),
+                        "link_role": link.get("link_role"),
+                        "linked_at": link.get("linked_at"),
+                        "linked_by": link.get("linked_by"),
+                    }
+                )
+            return results
+        except Exception as exc:
+            logger.error("List users for device error: %s", exc)
+            return []
 
     # ===== Device command methods =====
 

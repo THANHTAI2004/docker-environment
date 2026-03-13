@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     mongo_users_collection: str = "users"
     mongo_commands_collection: str = "device_commands"
     mongo_audit_collection: str = "audit_logs"
+    mongo_device_links_collection: str = "device_links"
     command_ttl_seconds: int = 300
     command_ack_timeout_seconds: int = 45
     command_max_dispatch_count: int = 3

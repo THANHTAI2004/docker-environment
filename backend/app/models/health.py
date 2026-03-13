@@ -48,7 +48,6 @@ class HealthReading(BaseModel):
         description="Unique device identifier",
     )
     device_type: str = Field(default="wrist", description="wrist or chest")
-    user_id: Optional[str] = Field(None, description="Associated user ID (optional)")
     timestamp: Optional[float] = None
     seq: Optional[int] = None
 

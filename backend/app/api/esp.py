@@ -24,8 +24,6 @@ async def ingest_reading(
     """Receive one ESP health reading via HTTPS and store in MongoDB."""
     reading = dict(payload)
     reading["device_id"] = device_id
-    if device.get("user_id"):
-        reading.setdefault("user_id", device["user_id"])
 
     try:
         validated = HealthReading(**reading)

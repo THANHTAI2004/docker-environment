@@ -38,6 +38,17 @@ async def create_user(
     return {"status": "success", "user_id": user.user_id}
 
 
+@router.get("/me/devices")
+async def get_my_devices(current_user: dict = Depends(require_current_user)):
+    """List devices linked to the current authenticated user."""
+    items = await db.list_devices_for_user(current_user["user_id"])
+    return {
+        "user_id": current_user["user_id"],
+        "count": len(items),
+        "items": items,
+    }
+
+
 @router.get("/users/{user_id}")
 async def get_user(user_id: str, current_user: dict = Depends(require_current_user)):
     """Get user profile."""

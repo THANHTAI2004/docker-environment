@@ -33,21 +33,20 @@ class AlertService:
     async def check_health_reading(
         self,
         reading: Dict[str, Any],
-        user_thresholds: Optional[Dict[str, Any]] = None,
+        device_thresholds: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
         """
         Check a health reading against thresholds and generate alerts.
         Returns a list of newly generated alert documents.
         """
         alerts: list[Dict[str, Any]] = []
-        thresholds = self._normalize_thresholds(user_thresholds)
+        thresholds = self._normalize_thresholds(device_thresholds)
 
         device_id = reading.get("device_id")
-        user_id = reading.get("user_id")
         seq = reading.get("seq")
         timestamp = reading.get("timestamp", time.time())
 
-        if not device_id or not user_id:
+        if not device_id:
             return alerts
 
         spo2 = self._get_metric(reading, "spo2")
@@ -56,7 +55,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "spo2_low",
                         "critical",
@@ -71,7 +69,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "spo2_low",
                         "warning",
@@ -89,7 +86,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "temp_high",
                         "critical",
@@ -104,7 +100,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "temp_high",
                         "warning",
@@ -119,7 +114,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "temp_low",
                         "warning",
@@ -137,7 +131,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "hr_high",
                         "critical",
@@ -152,7 +145,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "hr_high",
                         "warning",
@@ -167,7 +159,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "hr_low",
                         "critical",
@@ -182,7 +173,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "hr_low",
                         "warning",
@@ -200,7 +190,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "rr_high",
                         "warning",
@@ -215,7 +204,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "rr_low",
                         "warning",
@@ -233,7 +221,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "ecg_lead_off",
                         "warning",
@@ -248,7 +235,6 @@ class AlertService:
                 alerts.append(
                     self._create_alert(
                         device_id,
-                        user_id,
                         timestamp,
                         "ecg_quality",
                         "info",
@@ -296,7 +282,6 @@ class AlertService:
     def _create_alert(
         self,
         device_id: str,
-        user_id: str,
         timestamp: float,
         alert_type: str,
         severity: str,
@@ -309,7 +294,6 @@ class AlertService:
         """Create an alert document."""
         alert = {
             "device_id": device_id,
-            "user_id": user_id,
             "timestamp": timestamp,
             "alert_type": alert_type,
             "severity": severity,
