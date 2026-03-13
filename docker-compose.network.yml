@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
 
   mongodb:
-    image: mongo:latest
+    image: mongo:8.2.5
     container_name: mongodb
     network_mode: host
     restart: unless-stopped
@@ -51,21 +51,26 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://127.0.0.1:6379/0}
       - COMMAND_TTL_SECONDS=${COMMAND_TTL_SECONDS:-300}
       - EXPOSE_API_DOCS=${EXPOSE_API_DOCS:-false}
-    volumes:
-      - ./backend:/app
+      - EXPOSE_METRICS=${EXPOSE_METRICS:-false}
+      - METRICS_TOKEN=${METRICS_TOKEN-}
+      - ALLOW_ADMIN_API_KEY_BOOTSTRAP=${ALLOW_ADMIN_API_KEY_BOOTSTRAP:-false}
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - mongodb
       - redis
 
   nodered:
-    image: nodered/node-red:latest
+    image: nodered/node-red:4.1.7-debian
     container_name: nodered
     network_mode: host
     environment:
       - TZ=UTC
     volumes:
       - nodered_data:/data
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     depends_on:
       - mongodb

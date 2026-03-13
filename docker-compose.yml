@@ -12,7 +12,7 @@ services:
       retries: 5
 
   mongodb:
-    image: mongo:latest
+    image: mongo:8.2.5
     container_name: mongodb
     restart: unless-stopped
     environment:
@@ -50,15 +50,18 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - COMMAND_TTL_SECONDS=${COMMAND_TTL_SECONDS:-300}
       - EXPOSE_API_DOCS=${EXPOSE_API_DOCS:-false}
+      - EXPOSE_METRICS=${EXPOSE_METRICS:-false}
+      - METRICS_TOKEN=${METRICS_TOKEN-}
+      - ALLOW_ADMIN_API_KEY_BOOTSTRAP=${ALLOW_ADMIN_API_KEY_BOOTSTRAP:-false}
     ports:
       - "${BACKEND_BIND_IP:-127.0.0.1}:${BACKEND_HOST_PORT:-8000}:8000"
-    volumes:
-      - ./backend:/app
     depends_on:
       mongodb:
         condition: service_healthy
       redis:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
@@ -68,29 +71,33 @@ services:
       start_period: 20s
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.2.0
     container_name: cloudflared
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       backend:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     profiles:
       - cloudflare
 
   cloudflared-quick:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.2.0
     container_name: cloudflared-quick
     command: tunnel --no-autoupdate --url http://backend:8000
     depends_on:
       backend:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     profiles:
       - cloudflare-quick
 
   nodered:
-    image: nodered/node-red:latest
+    image: nodered/node-red:4.1.7-debian
     container_name: nodered
     environment:
       - TZ=UTC
@@ -101,6 +108,8 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:1880/"]

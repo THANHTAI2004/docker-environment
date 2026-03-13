@@ -11,7 +11,7 @@ import uuid
 from ..db import db
 from ..models import DeviceRegistration, ECGRequestCommand, ThresholdsUpdate, DeviceLinkRequest
 from ..utils.access import ensure_device_access, filter_device_response
-from ..utils.auth import hash_device_token, require_admin_principal, require_current_user
+from ..utils.auth import hash_device_token, require_current_user, require_admin_user
 from ..config import settings
 
 router = APIRouter(prefix="/api/v1", tags=["devices"])
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/v1", tags=["devices"])
 async def register_device(
     device: DeviceRegistration,
     request: Request,
-    principal: dict = Depends(require_admin_principal),
+    principal: dict = Depends(require_admin_user),
 ):
     """Register or update one device."""
     device_dict = device.model_dump(exclude_none=True)
@@ -218,7 +218,7 @@ async def update_device_thresholds(
     device_id: str,
     thresholds: ThresholdsUpdate,
     request: Request,
-    principal: dict = Depends(require_admin_principal),
+    principal: dict = Depends(require_admin_user),
 ):
     """Update alert thresholds stored directly on one device."""
     threshold_dict = {k: v for k, v in thresholds.model_dump().items() if v is not None}
@@ -246,7 +246,7 @@ async def update_device_thresholds(
 async def rotate_esp_token(
     device_id: str,
     request: Request,
-    principal: dict = Depends(require_admin_principal),
+    principal: dict = Depends(require_admin_user),
 ):
     """Generate and set new ESP token for a device (shown only once)."""
     device = await db.get_device(device_id)
@@ -397,11 +397,9 @@ async def get_device_summary(
 
 
 @router.get("/public/devices/{device_id}")
-async def get_public_device(device_id: str):
-    """Public device profile for device-centric apps."""
-    device = await db.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+async def get_public_device(device_id: str, current_user: dict = Depends(require_current_user)):
+    """Authenticated device profile alias kept for backward compatibility."""
+    device = await ensure_device_access(current_user, device_id)
     return {
         "device_id": device.get("device_id"),
         "device_type": device.get("device_type"),
@@ -419,11 +417,10 @@ async def get_public_device_history(
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
     limit: int = Query(default=100, le=2000),
+    current_user: dict = Depends(require_current_user),
 ):
-    """Public history endpoint resolved only by device_id."""
-    device = await db.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+    """Authenticated history alias kept for backward compatibility."""
+    await ensure_device_access(current_user, device_id)
     items = await db.get_readings_by_device(
         device_id=device_id,
         start_time=start_time,
@@ -434,8 +431,12 @@ async def get_public_device_history(
 
 
 @router.get("/public/devices/{device_id}/latest")
-async def get_public_device_latest(device_id: str):
-    """Public latest-reading endpoint resolved only by device_id."""
+async def get_public_device_latest(
+    device_id: str,
+    current_user: dict = Depends(require_current_user),
+):
+    """Authenticated latest-reading alias kept for backward compatibility."""
+    await ensure_device_access(current_user, device_id)
     latest = await db.get_latest_reading(device_id)
     if not latest:
         raise HTTPException(status_code=404, detail="No data found for this device")
@@ -447,11 +448,10 @@ async def get_public_device_ecg(
     device_id: str,
     quality_filter: Optional[str] = Query(default=None, pattern="^(good|fair|poor)$"),
     limit: int = Query(default=10, le=100),
+    current_user: dict = Depends(require_current_user),
 ):
-    """Public ECG history for one device."""
-    device = await db.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+    """Authenticated ECG history alias kept for backward compatibility."""
+    await ensure_device_access(current_user, device_id)
     items = await db.get_device_ecg_readings(
         device_id=device_id,
         quality_filter=quality_filter,
@@ -466,11 +466,10 @@ async def get_public_device_alerts(
     severity: Optional[str] = Query(default=None, pattern="^(info|warning|critical)$"),
     acknowledged: Optional[bool] = None,
     limit: int = Query(default=100, le=1000),
+    current_user: dict = Depends(require_current_user),
 ):
-    """Public alert history for one device."""
-    device = await db.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+    """Authenticated alert history alias kept for backward compatibility."""
+    await ensure_device_access(current_user, device_id)
     items = await db.get_alerts_by_device(
         device_id=device_id,
         severity=severity,
@@ -484,13 +483,12 @@ async def get_public_device_alerts(
 async def get_public_device_summary(
     device_id: str,
     period: str = Query(default="24h", pattern="^(1h|6h|24h|7d|30d)$"),
+    current_user: dict = Depends(require_current_user),
 ):
-    """Public summary endpoint resolved only by device_id."""
+    """Authenticated summary alias kept for backward compatibility."""
     import time
 
-    device = await db.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+    device = await ensure_device_access(current_user, device_id)
 
     periods = {
         "1h": 3600,
@@ -555,7 +553,7 @@ async def cancel_device_command(
     device_id: str,
     command_id: str,
     request: Request,
-    principal: dict = Depends(require_admin_principal),
+    principal: dict = Depends(require_admin_user),
 ):
     """Cancel a queued or in-flight command."""
     success = await db.cancel_device_command(device_id, command_id, "Cancelled by admin")

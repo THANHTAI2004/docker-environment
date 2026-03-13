@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
-from fastapi import Header, HTTPException, status
+from fastapi import Header, HTTPException, Request, status
 
 from ..config import settings
 from ..db import db
@@ -120,6 +120,11 @@ async def require_api_key(x_api_key: str | None = Header(default=None)):
 
 async def require_admin_api_key(x_api_key: str | None = Header(default=None)):
     """Allow admin bootstrap with the shared admin secret only."""
+    if not settings.allow_admin_api_key_bootstrap:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin API key bootstrap is disabled",
+        )
     if _matches_secret(x_api_key, settings.admin_api_key):
         return {
             "user_id": "system-admin",
@@ -171,20 +176,58 @@ async def require_current_user(authorization: str | None = Header(default=None))
     return user
 
 
-async def require_admin_principal(
+async def require_admin_user(authorization: str | None = Header(default=None)) -> Dict[str, Any]:
+    """Require an admin JWT and disallow API-key fallback."""
+    user = await require_current_user(authorization)
+    if user.get("role") == "admin":
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Admin role required",
+    )
+
+
+async def require_bootstrap_admin_principal(
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),
 ) -> Dict[str, Any]:
     """Allow either an admin JWT or the break-glass admin API key."""
     if authorization and authorization.startswith("Bearer "):
-        user = await require_current_user(authorization)
-        if user.get("role") == "admin":
-            return user
+        return await require_admin_user(authorization)
+    return await require_admin_api_key(x_api_key)
+
+
+async def require_admin_principal(
+    authorization: str | None = Header(default=None),
+) -> Dict[str, Any]:
+    """Backward-compatible admin dependency that now requires JWT only."""
+    return await require_admin_user(authorization)
+
+
+async def require_metrics_access(
+    request: Request,
+    x_metrics_token: str | None = Header(default=None),
+) -> None:
+    """Protect metrics behind an explicit enable flag and optional token."""
+    if not settings.expose_metrics:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    if settings.metrics_token:
+        if _matches_secret(x_metrics_token, settings.metrics_token):
+            return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role required",
+            detail="Metrics token required",
         )
-    return await require_admin_api_key(x_api_key)
+
+    client_host = request.client.host if request.client else None
+    if client_host in {"127.0.0.1", "::1", "localhost"}:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Metrics available only from localhost or with token",
+    )
 
 
 def hash_device_token(token: str) -> str:

@@ -29,7 +29,7 @@ from .observability import (
     set_request_id,
 )
 from .utils.access import ensure_device_access
-from .utils.auth import require_admin_principal, require_current_user
+from .utils.auth import require_admin_principal, require_current_user, require_metrics_access
 from .utils.rate_limit import RateLimiter
 
 # Import API routers
@@ -235,7 +235,7 @@ async def health_check():
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics(_: None = Depends(require_metrics_access)):
     """Prometheus metrics endpoint."""
     PENDING_COMMANDS.set(await db.count_pending_commands())
     return Response(content=metrics_payload(), media_type=metrics_content_type())

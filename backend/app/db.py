@@ -142,6 +142,7 @@ class Database:
             logger.info("MongoDB indexes created successfully")
         except Exception as exc:
             logger.error("Index creation error: %s", exc)
+            raise
 
     # ===== Utility serialization =====
 

@@ -4,10 +4,10 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 
 # Install dependencies in a virtual environment
-COPY requirements.txt .
+COPY requirements-prod.txt .
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements-prod.txt
 
 # Stage 2: Runtime image
 FROM python:3.11-slim
@@ -28,6 +28,7 @@ USER appuser
 
 # Use the virtual environment
 ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Expose port
 EXPOSE 8000

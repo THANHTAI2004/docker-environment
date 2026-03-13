@@ -1,6 +1,6 @@
 #!/bin/bash
 # MongoDB Restore Script
-# Usage: ./restore.sh <backup_file.tar.gz>
+# Usage: ./restore.sh <backup_file.tar.gz> --force
 
 set -e
 
@@ -17,11 +17,12 @@ fi
 
 if [ -z "$1" ]; then
   echo "❌ Error: Backup file required"
-  echo "Usage: ./restore.sh <backup_file.tar.gz>"
+  echo "Usage: ./restore.sh <backup_file.tar.gz> --force"
   exit 1
 fi
 
 BACKUP_FILE="$1"
+CONFIRM_FLAG="${2:-}"
 CONTAINER_NAME="${MONGO_CONTAINER_NAME:-mongodb}"
 MONGO_USER="${MONGO_ROOT_USERNAME:-admin}"
 MONGO_PASS="${MONGO_ROOT_PASSWORD:-}"
@@ -34,6 +35,12 @@ fi
 
 if [ ! -f "$BACKUP_FILE" ]; then
   echo "❌ Error: Backup file not found: $BACKUP_FILE"
+  exit 1
+fi
+
+if [ "$CONFIRM_FLAG" != "--force" ]; then
+  echo "❌ Error: Restore requires explicit confirmation."
+  echo "Usage: ./restore.sh <backup_file.tar.gz> --force"
   exit 1
 fi
 

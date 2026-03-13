@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     expose_error_details: bool = False
     expose_api_docs: bool = False
+    expose_metrics: bool = False
+    metrics_token: str = ""
+    allow_admin_api_key_bootstrap: bool = False
     log_json: bool = True
     
     # MongoDB Configuration

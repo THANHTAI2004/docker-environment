@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from ..db import db
 from ..models import UserCreate, ThresholdsUpdate
 from ..utils.access import ensure_user_access
-from ..utils.auth import hash_password, require_admin_principal, require_current_user
+from ..utils.auth import (
+    hash_password,
+    require_bootstrap_admin_principal,
+    require_current_user,
+)
 
 
 router = APIRouter(prefix="/api/v1", tags=["users"])
@@ -15,7 +19,7 @@ router = APIRouter(prefix="/api/v1", tags=["users"])
 async def create_user(
     user: UserCreate,
     request: Request,
-    principal: dict = Depends(require_admin_principal),
+    principal: dict = Depends(require_bootstrap_admin_principal),
 ):
     """Create a new user."""
     user_dict = user.model_dump(exclude_none=True)
