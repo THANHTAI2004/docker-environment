@@ -18,6 +18,7 @@ class MetadataInfo(BaseModel):
     """Device metadata."""
     battery_level: Optional[int] = Field(None, ge=0, le=100, description="Battery percentage")
     signal_strength: Optional[int] = Field(None, description="WiFi RSSI (dBm)")
+    signal_quality: Optional[int] = Field(None, ge=0, le=100, description="BLE/application quality score")
     firmware_version: Optional[str] = Field(None, description="Firmware version")
 
 
@@ -47,7 +48,7 @@ class HealthReading(BaseModel):
         validation_alias=AliasChoices("device_id", "device_uid"),
         description="Unique device identifier",
     )
-    device_type: str = Field(default="wrist", description="wrist or chest")
+    device_type: Optional[str] = Field(default=None, description="wrist or chest")
     timestamp: Optional[float] = None
     seq: Optional[int] = None
 

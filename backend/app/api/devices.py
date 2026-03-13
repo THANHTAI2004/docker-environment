@@ -294,48 +294,10 @@ async def _get_device_history(
     }
 
 
-@router.get("/devices/{device_id}/history")
-async def get_device_history(
-    device_id: str,
-    start_time: Optional[float] = None,
-    end_time: Optional[float] = None,
-    limit: int = Query(default=100, le=2000),
-    current_user: dict = Depends(require_current_user),
-):
-    """Get historical readings for one device."""
-    return await _get_device_history(device_id, start_time, end_time, limit, current_user)
-
-
-@router.get("/devices/{device_id}/vitals")
-async def get_device_vitals(
-    device_id: str,
-    start_time: Optional[float] = None,
-    end_time: Optional[float] = None,
-    limit: int = Query(default=100, le=2000),
-    current_user: dict = Depends(require_current_user),
-):
-    """Backward-compatible alias for /history."""
-    return await _get_device_history(device_id, start_time, end_time, limit, current_user)
-
-
-@router.get("/devices/{device_id}/latest")
-async def get_device_latest(device_id: str, current_user: dict = Depends(require_current_user)):
-    """Get most recent reading from one device."""
-    await ensure_device_access(current_user, device_id)
-    latest = await db.get_latest_reading(device_id)
-    if not latest:
-        raise HTTPException(status_code=404, detail="No data found for this device")
-    return latest
-
-
-@router.get("/devices/{device_id}/summary")
-async def get_device_summary(
-    device_id: str,
-    period: str = Query(default="24h", pattern="^(1h|6h|24h|7d|30d)$"),
-    current_user: dict = Depends(require_current_user),
-):
-    """Get aggregate summary statistics for one device."""
+async def _build_device_summary(device_id: str, period: str, current_user: dict):
+    """Build summary stats while tolerating small device clock drift."""
     import time
+
     device = await ensure_device_access(current_user, device_id)
 
     periods = {
@@ -345,9 +307,11 @@ async def get_device_summary(
         "7d": 604800,
         "30d": 2592000,
     }
+    skew_tolerance = max(0, settings.device_clock_skew_tolerance_seconds)
+    now = time.time()
+    start_time = now - periods[period]
+    end_time = now + skew_tolerance
 
-    end_time = time.time()
-    start_time = end_time - periods[period]
     items = await db.get_readings_by_device(
         device_id=device_id,
         start_time=start_time,
@@ -393,7 +357,52 @@ async def get_device_summary(
         },
         "total_readings": len(items),
         "reading_density_per_hour": round(len(items) / (periods[period] / 3600), 2),
+        "clock_skew_tolerance_seconds": skew_tolerance,
     }
+
+
+@router.get("/devices/{device_id}/history")
+async def get_device_history(
+    device_id: str,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None,
+    limit: int = Query(default=100, le=2000),
+    current_user: dict = Depends(require_current_user),
+):
+    """Get historical readings for one device."""
+    return await _get_device_history(device_id, start_time, end_time, limit, current_user)
+
+
+@router.get("/devices/{device_id}/vitals")
+async def get_device_vitals(
+    device_id: str,
+    start_time: Optional[float] = None,
+    end_time: Optional[float] = None,
+    limit: int = Query(default=100, le=2000),
+    current_user: dict = Depends(require_current_user),
+):
+    """Backward-compatible alias for /history."""
+    return await _get_device_history(device_id, start_time, end_time, limit, current_user)
+
+
+@router.get("/devices/{device_id}/latest")
+async def get_device_latest(device_id: str, current_user: dict = Depends(require_current_user)):
+    """Get most recent reading from one device."""
+    await ensure_device_access(current_user, device_id)
+    latest = await db.get_latest_reading(device_id)
+    if not latest:
+        raise HTTPException(status_code=404, detail="No data found for this device")
+    return latest
+
+
+@router.get("/devices/{device_id}/summary")
+async def get_device_summary(
+    device_id: str,
+    period: str = Query(default="24h", pattern="^(1h|6h|24h|7d|30d)$"),
+    current_user: dict = Depends(require_current_user),
+):
+    """Get aggregate summary statistics for one device."""
+    return await _build_device_summary(device_id, period, current_user)
 
 
 @router.get("/public/devices/{device_id}")
@@ -486,66 +495,7 @@ async def get_public_device_summary(
     current_user: dict = Depends(require_current_user),
 ):
     """Authenticated summary alias kept for backward compatibility."""
-    import time
-
-    device = await ensure_device_access(current_user, device_id)
-
-    periods = {
-        "1h": 3600,
-        "6h": 21600,
-        "24h": 86400,
-        "7d": 604800,
-        "30d": 2592000,
-    }
-
-    end_time = time.time()
-    start_time = end_time - periods[period]
-    items = await db.get_readings_by_device(
-        device_id=device_id,
-        start_time=start_time,
-        end_time=end_time,
-        limit=10000,
-    )
-
-    if not items:
-        return {
-            "device_id": device_id,
-            "period": period,
-            "error": "No data available for this period",
-        }
-
-    def calc_stats(values):
-        if not values:
-            return None
-        return {
-            "avg": round(sum(values) / len(values), 2),
-            "min": min(values),
-            "max": max(values),
-        }
-
-    def get_vital(item, key):
-        if "vitals" in item and item["vitals"] and key in item["vitals"]:
-            return item["vitals"][key]
-        return item.get(key)
-
-    spo2_values = [v for item in items if (v := get_vital(item, "spo2")) is not None]
-    temp_values = [v for item in items if (v := get_vital(item, "temperature")) is not None]
-    hr_values = [v for item in items if (v := get_vital(item, "heart_rate")) is not None]
-    rr_values = [v for item in items if (v := get_vital(item, "respiratory_rate")) is not None]
-
-    return {
-        "device_id": device_id,
-        "period": period,
-        "device_type": device.get("device_type"),
-        "summary": {
-            "spo2": calc_stats(spo2_values),
-            "temperature": calc_stats(temp_values),
-            "heart_rate": calc_stats(hr_values),
-            "respiratory_rate": calc_stats(rr_values),
-        },
-        "total_readings": len(items),
-        "reading_density_per_hour": round(len(items) / (periods[period] / 3600), 2),
-    }
+    return await _build_device_summary(device_id, period, current_user)
 
 
 @router.post("/devices/{device_id}/commands/{command_id}/cancel")

@@ -83,6 +83,71 @@ async def test_public_device_latest_with_auth_returns_data(client, app_module, m
 
 
 @pytest.mark.asyncio
+async def test_device_summary_tolerates_small_future_clock_skew(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+    observed = {}
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Wristband 1", "device_type": "wrist"}
+
+    async def fake_get_device_link(device_id, user_id):
+        return {"device_id": device_id, "user_id": user_id, "link_role": "owner"}
+
+    async def fake_get_readings_by_device(device_id, start_time=None, end_time=None, limit=100):
+        observed["start_time"] = start_time
+        observed["end_time"] = end_time
+        observed["limit"] = limit
+        return [
+            {
+                "_id": "abc123",
+                "device_id": device_id,
+                "timestamp": 1010,
+                "vitals": {"heart_rate": 82, "spo2": 98, "temperature": 36.7},
+            }
+        ]
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+    monkeypatch.setattr(app_module.db, "get_readings_by_device", fake_get_readings_by_device)
+    monkeypatch.setattr(app_module.settings, "device_clock_skew_tolerance_seconds", 300)
+    monkeypatch.setattr("time.time", lambda: 1000.0)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"user_id": "patient-001", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.get(
+        "/api/v1/devices/dev-001/summary?period=1h",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert login.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["total_readings"] == 1
+    assert response.json()["summary"]["heart_rate"]["avg"] == 82
+    assert response.json()["clock_skew_tolerance_seconds"] == 300
+    assert observed["start_time"] == -2600.0
+    assert observed["end_time"] == 1300.0
+    assert observed["limit"] == 10000
+
+
+@pytest.mark.asyncio
 async def test_me_devices_returns_linked_devices(client, app_module, monkeypatch):
     users = {
         "patient-001": {

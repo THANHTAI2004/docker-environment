@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     metrics_token: str = ""
     allow_admin_api_key_bootstrap: bool = False
     log_json: bool = True
+    device_clock_skew_tolerance_seconds: int = 300
     
     # MongoDB Configuration
     mongo_uri: str = "mongodb://admin:change-this-mongo-password@mongodb:27017"

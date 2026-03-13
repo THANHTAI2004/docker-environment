@@ -105,7 +105,7 @@ class HealthService:
         doc: Dict[str, Any] = {
             "device_id": reading.device_id,
             "device_uid": reading.device_id,
-            "device_type": reading.device_type,
+            "device_type": reading.device_type or "wrist",
             "timestamp": timestamp,
             "recorded_at": recorded_at,
             "received_at": received_at,
@@ -123,6 +123,8 @@ class HealthService:
                 doc["battery_level"] = metadata["battery_level"]
             if metadata.get("signal_strength") is not None:
                 doc["signal_strength"] = metadata["signal_strength"]
+            if metadata.get("signal_quality") is not None:
+                doc["signal_quality"] = metadata["signal_quality"]
         if ecg:
             doc["ecg"] = ecg
         if reading.location:

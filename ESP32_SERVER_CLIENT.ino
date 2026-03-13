@@ -133,8 +133,11 @@ bool setupWiFiWithPortal(const char* apName = "ChestGateway", const char* apPass
 // - active device_id example: dev-esp-001
 static const char* API_BASE_URL = "https://api.eldercare.io.vn";
 static const char* DEVICE_ID = "dev-esp-001";
-// Generate/rotate token from server API, then paste here:
-// POST /api/v1/devices/{device_id}/esp-token (header X-API-Key)
+static const char* DEVICE_TYPE = "chest";
+static const char* FIRMWARE_VERSION = "chest-gateway-1.1.0";
+// Generate/rotate token from server API, then paste here.
+// Current backend requires an admin JWT for:
+// POST /api/v1/devices/{device_id}/esp-token
 static const char* DEVICE_TOKEN = "lO_M2IxrOk9qXTz6B5gnykK9rleGTUskhbGpZWk0pNo";
 static const unsigned long SEND_INTERVAL_MS = 10000;
 static const unsigned long POLL_INTERVAL_MS = 3000;
@@ -296,6 +299,7 @@ void sendVitalsToServer() {
     return;
   }
   StaticJsonDocument<512> doc;
+  doc["device_type"] = DEVICE_TYPE;
   doc["timestamp"] = nowEpochSeconds();
   doc["seq"] = seqCounter++;
   JsonObject vitals = doc.createNestedObject("vitals");
@@ -307,8 +311,8 @@ void sendVitalsToServer() {
   vitals["respiratory_rate"] = 16;  // placeholder if wrist payload does not provide RR
   JsonObject metadata = doc.createNestedObject("metadata");
   metadata["signal_strength"] = WiFi.RSSI();
-  metadata["firmware_version"] = "chest-gateway-1.0.0";
-  metadata["quality"] = r.q;
+  metadata["firmware_version"] = FIRMWARE_VERSION;
+  metadata["signal_quality"] = r.q;
   String body;
   serializeJson(doc, body);
   String resp;

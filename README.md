@@ -224,6 +224,18 @@ docker compose ps
 docker compose logs -f backend
 ```
 
+Smoke test nhanh sau deploy:
+
+```bash
+SMOKE_BASE_URL=http://127.0.0.1:18000 \
+SMOKE_USER_ID=<user_id> \
+SMOKE_PASSWORD='<password>' \
+SMOKE_DEVICE_ID=<device_id> \
+./scripts/smoke-api.sh
+```
+
+Tai lieu API danh cho app: `docs/app-api.md`
+
 ## 8. API và chức năng chính
 
 Các endpoint chính:
