@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from ..db import db
 from ..models import ESPCommandAck, HealthReading
+from ..observability import ESP_VALIDATION_FAILURE_TOTAL
 from ..services import health_service
 from ..utils.auth import require_device_token
 
@@ -28,6 +29,7 @@ async def ingest_reading(
     try:
         validated = HealthReading(**reading)
     except ValidationError as exc:
+        ESP_VALIDATION_FAILURE_TOTAL.inc()
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
     success = await health_service.process_health_reading(

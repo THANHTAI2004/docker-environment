@@ -63,6 +63,33 @@ async def test_login_returns_refresh_token_and_session_id(client, app_module, mo
 
 
 @pytest.mark.asyncio
+async def test_login_with_wrong_password_returns_401(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"user_id": "patient-001", "password": "WrongPass1"},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_refresh_rotates_token_and_invalidates_old_refresh(client, app_module, monkeypatch):
     users = {
         "patient-001": {
@@ -160,6 +187,52 @@ async def test_logout_revokes_current_session(client, app_module, monkeypatch):
     assert login.status_code == 200
     assert logout.status_code == 200
     assert me.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_after_logout_is_rejected(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_user(user_id):
+        return users.get(user_id)
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"user_id": "patient-001", "password": "PatientPass1"},
+    )
+    login_body = login.json()
+
+    logout = await client.post(
+        "/api/v1/auth/logout",
+        headers={"Authorization": f"Bearer {login_body['access_token']}"},
+    )
+    refresh = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": login_body["refresh_token"]},
+    )
+
+    assert logout.status_code == 200
+    assert refresh.status_code == 401
 
 
 @pytest.mark.asyncio

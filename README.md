@@ -2,7 +2,7 @@
 
 Tài liệu này mô tả hệ thống server trong repo `docker-environment`, theo đúng cấu trúc 15 mục yêu cầu để phục vụ team backend, firmware (ESP32) và app Flutter/Web.
 
-Cập nhật theo source hiện tại: **2026-03-09**
+Cập nhật theo source hiện tại: **2026-03-16**
 
 ## 1. Mục tiêu hệ thống
 
@@ -39,7 +39,7 @@ Các thành phần chính:
 - Backend: FastAPI (`backend/app`).
 - Database: MongoDB.
 - Rate limit/cache: Redis.
-- Queue: sử dụng collection MongoDB `device_commands` (không dùng Redis/RabbitMQ).
+- Queue: sử dụng collection MongoDB `device_commands` với recovery loop, retry guardrail và metrics riêng (không dùng Redis/RabbitMQ).
 - Proxy/Tunnel: Cloudflare Tunnel (optional), Nginx config mẫu.
 - Container: Docker Compose.
 
@@ -161,7 +161,7 @@ Biến môi trường cần thiết:
 - Backend: `BACKEND_HOST_PORT`, `BACKEND_BIND_IP`, `EXPOSE_API_DOCS`
 - CORS: `CORS_ALLOW_ORIGINS`, `CORS_ALLOW_ORIGIN_REGEX`
 - Rate-limit: `RATE_LIMIT_ENABLED`, `RATE_LIMIT_STORAGE`, `REDIS_URL`, `RATE_LIMIT_GENERAL_PER_MINUTE`, `RATE_LIMIT_ESP_PER_MINUTE`
-- Command queue: `COMMAND_TTL_SECONDS`
+- Command queue: `COMMAND_TTL_SECONDS`, `COMMAND_ACK_TIMEOUT_SECONDS`, `COMMAND_RETRY_DELAY_SECONDS`, `COMMAND_RECOVERY_INTERVAL_SECONDS`
 - Metrics: `EXPOSE_METRICS`, `METRICS_TOKEN`, `METRICS_ALLOW_IPS`
 - Cloudflare (optional): `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARE_PUBLIC_URL`
 
@@ -279,6 +279,7 @@ ESP (`/api/v1/esp`):
 Legacy:
 - `POST /readings`
 - `GET /history/{device_id}`
+- `GET /api/v1/public/devices/*` (deprecated aliases, vẫn yêu cầu auth)
 
 Input/output (ví dụ nhanh):
 
@@ -337,7 +338,7 @@ Collection chính:
 
 Schema dữ liệu (rút gọn):
 - `health_readings`: `device_id`, `user_id`, `timestamp`, `vitals`, `ecg`, `metadata`, `recorded_at`, `received_at`, `seq`
-- `device_commands`: `device_id`, `user_id`, `request_id`, `command`, `payload`, `status`, `expires_at`, `dispatched_at`, `completed_at`
+- `device_commands`: `device_id`, `user_id`, `request_id`, `command`, `payload`, `status`, `dispatch_count`, `dispatched_at`, `last_dispatched_at`, `next_retry_at`, `failure_reason`, `last_error`, `expires_at`, `completed_at`
 - `devices`: `device_id`, `device_type`, `user_id`, `status`, `esp_token_hash`, `metadata`, `last_seen`
 - `users`: `user_id`, `name`, `role`, `alert_thresholds`, `created_at`
 - `alerts`: `device_id`, `user_id`, `severity`, `metric`, `value`, `threshold`, `acknowledged`
@@ -372,6 +373,7 @@ Lưu database ra sao:
 - `db.enqueue_device_command()` tạo command ECG.
 - `db.claim_next_device_command()` phát command cho ESP poll.
 - `db.acknowledge_device_command()` cập nhật trạng thái done/failed.
+- Background recovery loop quét command `dispatched` bị timeout để retry hoặc fail terminal, và finalize `acked -> completed`.
 
 Trả kết quả về client thế nào:
 - API trả JSON trực tiếp.
@@ -436,6 +438,7 @@ Debug lỗi:
 Monitoring nếu có:
 - `scripts/monitor.sh` kiểm tra health endpoint, trạng thái container, disk usage.
 - Prometheus có thể scrape `/metrics`.
+- Metrics domain chính hiện có: auth login/refresh/revoke, queue dispatch/retry/timeout/completed/failed/latency, ingest received/validation-fail/duplicate, alerts created/acknowledged.
 
 ## 13. Triển khai và vận hành
 
@@ -497,17 +500,17 @@ Lỗi WSL/dev environment nếu có:
 Ưu điểm hiện tại:
 - Kiến trúc tách lớp khá rõ (api/service/db/models/utils).
 - Hỗ trợ đầy đủ ingest + ECG on-demand queue polling.
-- Có index, TTL, readiness, JWT/RBAC cơ bản, request ID, metrics, rate-limit Redis-backed.
+- Có index, TTL, readiness, JWT/RBAC + refresh/revoke session, request ID, metrics domain, recovery loop cho command queue, rate-limit Redis-backed.
 - Có script vận hành (backup/restore/monitor/deploy cloudflare).
 
 Hạn chế:
 - Queue vẫn dùng Mongo polling nên hợp với small/medium scale hơn broker chuyên dụng.
-- Chưa có refresh token/session revocation.
 - Dashboard/alerting hạ tầng vẫn cần triển khai ngoài repo.
+- Chưa có integration test Mongo/Redis thật trong CI mặc định.
 
 Hướng cải tiến sau này:
-1. Thêm refresh token/session revocation và MFA cho admin.
-2. Mở rộng test integration với Mongo/Redis thật trong CI.
-3. Bổ sung alerting/dashboard production cho metrics và audit log.
-4. Cân nhắc broker riêng nếu queue command tăng tải mạnh.
-5. Chuẩn hóa runbook production cho backup/restore/disaster recovery.
+1. Mở rộng test integration với Mongo/Redis thật trong CI.
+2. Bổ sung alerting/dashboard production cho metrics và audit log.
+3. Cân nhắc broker riêng nếu queue command tăng tải mạnh.
+4. Chuẩn hóa runbook production cho backup/restore/disaster recovery.
+5. Bổ sung session/device admin tooling như revoke-all-sessions hoặc MFA cho admin.

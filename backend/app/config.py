@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     mongo_auth_sessions_collection: str = "auth_sessions"
     command_ttl_seconds: int = 300
     command_ack_timeout_seconds: int = 45
+    command_retry_delay_seconds: int = 5
+    command_recovery_interval_seconds: int = 15
     command_max_dispatch_count: int = 3
     command_max_pending_per_device: int = 3
     command_dedupe_window_seconds: int = 20

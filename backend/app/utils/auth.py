@@ -13,6 +13,7 @@ from fastapi import Header, HTTPException, Request, status
 
 from ..config import settings
 from ..db import db
+from ..observability import AUTH_REFRESH_TOTAL
 
 
 def _matches_secret(provided: str | None, expected: str) -> bool:
@@ -68,6 +69,7 @@ def create_access_token(user: Dict[str, Any], session_id: str) -> tuple[str, dat
         "sub": user["user_id"],
         "role": user["role"],
         "sid": session_id,
+        "jti": secrets.token_urlsafe(8),
         "token_type": "access",
         "exp": expires_at,
         "iat": issued_at,
@@ -117,6 +119,25 @@ def peek_token_subject(authorization: str | None) -> str | None:
             options={"verify_exp": False},
         )
         return payload.get("sub")
+    except jwt.InvalidTokenError:
+        return None
+
+
+def peek_token_role(authorization: str | None) -> str | None:
+    """Best-effort role extraction for logging and metrics labels."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:].strip()
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            options={"verify_exp": False},
+        )
+        return payload.get("role")
     except jwt.InvalidTokenError:
         return None
 
@@ -181,6 +202,7 @@ async def rotate_refresh_session(refresh_token: str) -> Dict[str, Any]:
     """Rotate one refresh token and issue a new access token for the same session."""
     session = await db.get_auth_session_by_refresh_token_hash(hash_refresh_token(refresh_token))
     if not _is_active_session(session):
+        AUTH_REFRESH_TOTAL.labels(outcome="invalid").inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
@@ -188,6 +210,7 @@ async def rotate_refresh_session(refresh_token: str) -> Dict[str, Any]:
 
     user = await db.get_user_auth(session["user_id"])
     if not user or not user.get("is_active", True):
+        AUTH_REFRESH_TOTAL.labels(outcome="inactive_user").inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User is inactive or not found",
@@ -202,12 +225,14 @@ async def rotate_refresh_session(refresh_token: str) -> Dict[str, Any]:
         expires_at=refresh_expires_at,
     )
     if not rotated:
+        AUTH_REFRESH_TOTAL.labels(outcome="invalid").inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
         )
 
     access_token, expires_at = create_access_token(user, session["session_id"])
+    AUTH_REFRESH_TOTAL.labels(outcome="success").inc()
     return {
         "access_token": access_token,
         "refresh_token": new_refresh_token,

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..db import db
 from ..models import LoginRequest, RefreshRequest
+from ..observability import AUTH_LOGIN_TOTAL, AUTH_REVOKED_SESSIONS_TOTAL
 from ..utils.auth import (
     issue_session_tokens,
     require_current_user,
@@ -21,11 +22,14 @@ async def login(payload: LoginRequest, request: Request):
     """Exchange user credentials for access + refresh tokens."""
     user = await db.get_user_auth(payload.user_id)
     if not user or not user.get("is_active", True):
+        AUTH_LOGIN_TOTAL.labels(outcome="invalid_credentials").inc()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not verify_password(payload.password, user.get("password_hash")):
+        AUTH_LOGIN_TOTAL.labels(outcome="invalid_credentials").inc()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     tokens = await issue_session_tokens(user)
+    AUTH_LOGIN_TOTAL.labels(outcome="success").inc()
     await db.insert_audit_log(
         {
             "action": "auth.login",
@@ -69,6 +73,7 @@ async def logout(request: Request, current_user: dict = Depends(require_current_
     if not success:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
+    AUTH_REVOKED_SESSIONS_TOTAL.labels(reason="logout").inc()
     await db.insert_audit_log(
         {
             "action": "auth.logout",

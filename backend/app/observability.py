@@ -34,6 +34,79 @@ PENDING_COMMANDS = Gauge(
     "wearable_device_commands_pending",
     "Pending or in-flight device commands",
 )
+DEVICE_COMMANDS_BY_STATUS = Gauge(
+    "wearable_device_commands_current",
+    "Current device commands by status",
+    ["status"],
+)
+DEVICE_COMMAND_DISPATCHED_TOTAL = Counter(
+    "wearable_device_command_dispatched_total",
+    "Total device commands dispatched to ESP",
+    ["command"],
+)
+DEVICE_COMMAND_COMPLETED_TOTAL = Counter(
+    "wearable_device_command_completed_total",
+    "Total device commands completed successfully",
+    ["command"],
+)
+DEVICE_COMMAND_FAILED_TOTAL = Counter(
+    "wearable_device_command_failed_total",
+    "Total device commands that failed terminally",
+    ["command", "reason"],
+)
+DEVICE_COMMAND_TIMEOUT_TOTAL = Counter(
+    "wearable_device_command_timeout_total",
+    "Total device commands that exceeded ACK timeout",
+    ["command"],
+)
+DEVICE_COMMAND_RETRY_TOTAL = Counter(
+    "wearable_device_command_retry_total",
+    "Total device command retries scheduled",
+    ["command"],
+)
+DEVICE_COMMAND_QUEUE_LATENCY = Histogram(
+    "wearable_device_command_queue_latency_seconds",
+    "Time spent waiting in queue before dispatch",
+    ["command"],
+)
+AUTH_LOGIN_TOTAL = Counter(
+    "wearable_auth_login_total",
+    "Login attempts",
+    ["outcome"],
+)
+AUTH_REFRESH_TOTAL = Counter(
+    "wearable_auth_refresh_total",
+    "Refresh-token attempts",
+    ["outcome"],
+)
+AUTH_REVOKED_SESSIONS_TOTAL = Counter(
+    "wearable_auth_revoked_sessions_total",
+    "Revoked auth sessions",
+    ["reason"],
+)
+ESP_READINGS_RECEIVED_TOTAL = Counter(
+    "wearable_esp_readings_received_total",
+    "ESP readings received by ingest API",
+    ["device_type"],
+)
+ESP_VALIDATION_FAILURE_TOTAL = Counter(
+    "wearable_esp_validation_failure_total",
+    "ESP ingest payload validation failures",
+)
+ESP_DUPLICATE_READINGS_TOTAL = Counter(
+    "wearable_esp_duplicate_readings_total",
+    "Duplicate ESP readings ignored by QoS deduplication",
+)
+ALERTS_CREATED_TOTAL = Counter(
+    "wearable_alerts_created_total",
+    "Alerts created by the alert service",
+    ["severity", "alert_type"],
+)
+ALERTS_ACKNOWLEDGED_TOTAL = Counter(
+    "wearable_alerts_acknowledged_total",
+    "Alerts acknowledged by users",
+    ["severity"],
+)
 
 
 class JsonFormatter(logging.Formatter):

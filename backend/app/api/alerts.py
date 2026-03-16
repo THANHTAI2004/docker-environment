@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from typing import Optional
 from ..db import db
 from ..models import AlertAcknowledge
+from ..observability import ALERTS_ACKNOWLEDGED_TOTAL
 from ..utils.access import ensure_alert_access, ensure_user_access
 from ..utils.auth import require_current_user
 
@@ -44,7 +45,7 @@ async def acknowledge_alert(
     current_user: dict = Depends(require_current_user),
 ):
     """Acknowledge an alert."""
-    await ensure_alert_access(current_user, alert_id)
+    alert = await ensure_alert_access(current_user, alert_id)
     success = await db.acknowledge_alert(
         alert_id=alert_id,
         acknowledged_by=current_user["user_id"],
@@ -53,6 +54,7 @@ async def acknowledge_alert(
     
     if not success:
         raise HTTPException(status_code=404, detail="Alert not found or already acknowledged")
+    ALERTS_ACKNOWLEDGED_TOTAL.labels(severity=alert.get("severity", "unknown")).inc()
     await db.insert_audit_log(
         {
             "action": "alert.acknowledge",

@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from ..db import db
 from ..models import HealthReading
+from ..observability import ESP_DUPLICATE_READINGS_TOTAL, ESP_READINGS_RECEIVED_TOTAL
 from .alert_service import alert_service
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class HealthService:
 
             reading = HealthReading(**reading_data)
             doc = self._normalize_for_storage(reading, reading_data)
+            ESP_READINGS_RECEIVED_TOTAL.labels(device_type=doc.get("device_type", "unknown")).inc()
 
             insert_status = await db.insert_health_reading(doc)
             if insert_status == "error":
@@ -54,6 +56,7 @@ class HealthService:
                 await db.update_device_metadata(reading.device_id, doc["metadata"])
 
             if insert_status == "duplicate":
+                ESP_DUPLICATE_READINGS_TOTAL.inc()
                 logger.info(
                     "Skipping alert generation for duplicate reading device=%s seq=%s",
                     reading.device_id,

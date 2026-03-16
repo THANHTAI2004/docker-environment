@@ -12,8 +12,26 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from .config import settings
+from .observability import (
+    DEVICE_COMMAND_COMPLETED_TOTAL,
+    DEVICE_COMMAND_DISPATCHED_TOTAL,
+    DEVICE_COMMAND_FAILED_TOTAL,
+    DEVICE_COMMAND_QUEUE_LATENCY,
+    DEVICE_COMMAND_RETRY_TOTAL,
+    DEVICE_COMMAND_TIMEOUT_TOTAL,
+)
 
 logger = logging.getLogger(__name__)
+
+COMMAND_STATUS_QUEUED = "queued"
+COMMAND_STATUS_DISPATCHED = "dispatched"
+COMMAND_STATUS_ACKED = "acked"
+COMMAND_STATUS_COMPLETED = "completed"
+COMMAND_STATUS_FAILED = "failed"
+COMMAND_STATUS_EXPIRED = "expired"
+COMMAND_STATUS_CANCELLED = "cancelled"
+
+ACTIVE_COMMAND_STATUSES = (COMMAND_STATUS_QUEUED, COMMAND_STATUS_DISPATCHED)
 
 
 class Database:
@@ -169,13 +187,16 @@ class Database:
             "last_seen",
             "created_at",
             "acknowledged_at",
+            "acked_at",
             "expires_at",
             "dispatched_at",
+            "last_dispatched_at",
             "completed_at",
             "linked_at",
             "updated_at",
             "last_refreshed_at",
             "revoked_at",
+            "next_retry_at",
         ):
             if isinstance(output.get(field), datetime):
                 output[field] = output[field].isoformat()
@@ -795,13 +816,14 @@ class Database:
             now = datetime.utcnow()
             payload = dict(doc)
             payload.setdefault("created_at", now)
-            payload.setdefault("status", "pending")
+            payload.setdefault("status", COMMAND_STATUS_QUEUED)
             payload.setdefault("dispatch_count", 0)
+            payload.setdefault("next_retry_at", now)
             payload["dedupe_key"] = self._make_command_dedupe_key(payload)
 
             pending_filter = {
                 "device_id": payload["device_id"],
-                "status": {"$in": ["pending", "retry_pending", "dispatched"]},
+                "status": {"$in": list(ACTIVE_COMMAND_STATUSES)},
             }
             pending_count = await self.device_commands.count_documents(pending_filter)
             if pending_count >= settings.command_max_pending_per_device:
@@ -811,7 +833,7 @@ class Database:
                 {
                     "device_id": payload["device_id"],
                     "dedupe_key": payload["dedupe_key"],
-                    "status": {"$in": ["pending", "retry_pending", "dispatched"]},
+                    "status": {"$in": list(ACTIVE_COMMAND_STATUSES)},
                     "created_at": {
                         "$gte": now - timedelta(seconds=settings.command_dedupe_window_seconds),
                     },
@@ -854,55 +876,9 @@ class Database:
             return None
         try:
             now = datetime.utcnow()
-            retry_before = now - timedelta(seconds=settings.command_ack_timeout_seconds)
-            await self.device_commands.update_many(
-                {
-                    "device_id": device_id,
-                    "status": {"$in": ["pending", "retry_pending", "dispatched"]},
-                    "expires_at": {"$lte": now},
-                },
-                {
-                    "$set": {
-                        "status": "expired",
-                        "completed_at": now,
-                        "ack_message": "Command expired before completion",
-                    }
-                },
-            )
-            await self.device_commands.update_many(
-                {
-                    "device_id": device_id,
-                    "status": "dispatched",
-                    "expires_at": {"$gt": now},
-                    "dispatched_at": {"$lte": retry_before},
-                    "dispatch_count": {"$lt": settings.command_max_dispatch_count},
-                },
-                {
-                    "$set": {
-                        "status": "retry_pending",
-                        "retry_at": now,
-                        "ack_message": "Retrying after dispatch timeout",
-                    }
-                },
-            )
-            await self.device_commands.update_many(
-                {
-                    "device_id": device_id,
-                    "status": "dispatched",
-                    "dispatched_at": {"$lte": retry_before},
-                    "dispatch_count": {"$gte": settings.command_max_dispatch_count},
-                },
-                {
-                    "$set": {
-                        "status": "expired",
-                        "completed_at": now,
-                        "ack_message": "Retry limit exceeded",
-                    }
-                },
-            )
             query: Dict[str, Any] = {
                 "device_id": device_id,
-                "status": {"$in": ["pending", "retry_pending"]},
+                "status": COMMAND_STATUS_QUEUED,
                 "$or": [
                     {"expires_at": {"$exists": False}},
                     {"expires_at": None},
@@ -911,15 +887,21 @@ class Database:
                 "$and": [
                     {
                         "$or": [
-                            {"retry_at": {"$exists": False}},
-                            {"retry_at": None},
-                            {"retry_at": {"$lte": now}},
+                            {"next_retry_at": {"$exists": False}},
+                            {"next_retry_at": None},
+                            {"next_retry_at": {"$lte": now}},
                         ]
                     }
                 ],
             }
             update = {
-                "$set": {"status": "dispatched", "dispatched_at": now},
+                "$set": {
+                    "status": COMMAND_STATUS_DISPATCHED,
+                    "dispatched_at": now,
+                    "last_dispatched_at": now,
+                    "last_error": None,
+                    "failure_reason": None,
+                },
                 "$inc": {"dispatch_count": 1},
             }
             doc = await self.device_commands.find_one_and_update(
@@ -928,6 +910,13 @@ class Database:
                 sort=[("created_at", 1)],
                 return_document=ReturnDocument.AFTER,
             )
+            if doc:
+                command_name = doc.get("command", "unknown")
+                created_at = doc.get("created_at")
+                if isinstance(created_at, datetime):
+                    latency = max((now - created_at).total_seconds(), 0.0)
+                    DEVICE_COMMAND_QUEUE_LATENCY.labels(command=command_name).observe(latency)
+                DEVICE_COMMAND_DISPATCHED_TOTAL.labels(command=command_name).inc()
             return self._serialize_doc(doc) if doc else None
         except Exception as exc:
             logger.error("Claim device command error: %s", exc)
@@ -946,21 +935,36 @@ class Database:
         try:
             from bson import ObjectId
 
-            update = {
-                "$set": {
-                    "status": status,
-                    "completed_at": datetime.utcnow(),
-                    "ack_message": message,
-                }
+            normalized_status = COMMAND_STATUS_ACKED if status == "done" else COMMAND_STATUS_FAILED
+            now = datetime.utcnow()
+            update_fields: Dict[str, Any] = {
+                "status": normalized_status,
+                "ack_message": message,
+                "acked_at": now,
             }
+            if normalized_status == COMMAND_STATUS_FAILED:
+                update_fields["completed_at"] = now
+                update_fields["failure_reason"] = message or "device reported failure"
+                update_fields["last_error"] = message or "device reported failure"
+
+            update = {
+                "$set": update_fields
+            }
+            current = await self.device_commands.find_one({"_id": ObjectId(command_id), "device_id": device_id})
+            command_name = current.get("command", "unknown") if current else "unknown"
             result = await self.device_commands.update_one(
                 {
                     "_id": ObjectId(command_id),
                     "device_id": device_id,
-                    "status": {"$in": ["dispatched", "retry_pending", "pending"]},
+                    "status": COMMAND_STATUS_DISPATCHED,
                 },
                 update,
             )
+            if result.modified_count > 0 and normalized_status == COMMAND_STATUS_FAILED:
+                DEVICE_COMMAND_FAILED_TOTAL.labels(
+                    command=command_name,
+                    reason="device_failed",
+                ).inc()
             return result.modified_count > 0
         except Exception as exc:
             logger.error("Acknowledge device command error: %s", exc)
@@ -977,13 +981,15 @@ class Database:
                 {
                     "_id": ObjectId(command_id),
                     "device_id": device_id,
-                    "status": {"$in": ["pending", "retry_pending", "dispatched"]},
+                    "status": {"$in": [COMMAND_STATUS_QUEUED, COMMAND_STATUS_DISPATCHED]},
                 },
                 {
                     "$set": {
-                        "status": "cancelled",
+                        "status": COMMAND_STATUS_CANCELLED,
                         "completed_at": datetime.utcnow(),
                         "ack_message": reason,
+                        "failure_reason": reason,
+                        "last_error": reason,
                     }
                 },
             )
@@ -991,6 +997,130 @@ class Database:
         except Exception as exc:
             logger.error("Cancel device command error: %s", exc)
             return False
+
+    async def recover_stale_device_commands(self) -> Dict[str, int]:
+        """Recover stale command states and finalize terminal transitions."""
+        if self.device_commands is None:
+            return {"completed": 0, "requeued": 0, "failed": 0, "expired": 0}
+
+        summary = {"completed": 0, "requeued": 0, "failed": 0, "expired": 0}
+        now = datetime.utcnow()
+        retry_after = now + timedelta(seconds=max(0, settings.command_retry_delay_seconds))
+        retry_before = now - timedelta(seconds=settings.command_ack_timeout_seconds)
+
+        try:
+            acked_cursor = self.device_commands.find({"status": COMMAND_STATUS_ACKED})
+            async for doc in acked_cursor:
+                updated = await self.device_commands.update_one(
+                    {"_id": doc["_id"], "status": COMMAND_STATUS_ACKED},
+                    {
+                        "$set": {
+                            "status": COMMAND_STATUS_COMPLETED,
+                            "completed_at": now,
+                        }
+                    },
+                )
+                if updated.modified_count > 0:
+                    summary["completed"] += 1
+                    DEVICE_COMMAND_COMPLETED_TOTAL.labels(
+                        command=doc.get("command", "unknown"),
+                    ).inc()
+
+            expirable_cursor = self.device_commands.find(
+                {
+                    "status": {"$in": [COMMAND_STATUS_QUEUED, COMMAND_STATUS_DISPATCHED]},
+                    "expires_at": {"$lte": now},
+                }
+            )
+            async for doc in expirable_cursor:
+                reason = "command ttl expired"
+                updated = await self.device_commands.update_one(
+                    {
+                        "_id": doc["_id"],
+                        "status": {"$in": [COMMAND_STATUS_QUEUED, COMMAND_STATUS_DISPATCHED]},
+                    },
+                    {
+                        "$set": {
+                            "status": COMMAND_STATUS_EXPIRED,
+                            "completed_at": now,
+                            "failure_reason": reason,
+                            "last_error": reason,
+                        }
+                    },
+                )
+                if updated.modified_count > 0:
+                    summary["expired"] += 1
+                    DEVICE_COMMAND_FAILED_TOTAL.labels(
+                        command=doc.get("command", "unknown"),
+                        reason="expired",
+                    ).inc()
+
+            timed_out_cursor = self.device_commands.find(
+                {
+                    "status": COMMAND_STATUS_DISPATCHED,
+                    "$or": [
+                        {"expires_at": {"$exists": False}},
+                        {"expires_at": None},
+                        {"expires_at": {"$gt": now}},
+                    ],
+                    "dispatched_at": {"$lte": retry_before},
+                }
+            )
+            async for doc in timed_out_cursor:
+                command_name = doc.get("command", "unknown")
+                DEVICE_COMMAND_TIMEOUT_TOTAL.labels(command=command_name).inc()
+                if int(doc.get("dispatch_count", 0)) < settings.command_max_dispatch_count:
+                    updated = await self.device_commands.update_one(
+                        {"_id": doc["_id"], "status": COMMAND_STATUS_DISPATCHED},
+                        {
+                            "$set": {
+                                "status": COMMAND_STATUS_QUEUED,
+                                "next_retry_at": retry_after,
+                                "last_error": "Command ACK timeout",
+                                "failure_reason": None,
+                            }
+                        },
+                    )
+                    if updated.modified_count > 0:
+                        summary["requeued"] += 1
+                        DEVICE_COMMAND_RETRY_TOTAL.labels(command=command_name).inc()
+                else:
+                    reason = "ack timeout exceeded"
+                    updated = await self.device_commands.update_one(
+                        {"_id": doc["_id"], "status": COMMAND_STATUS_DISPATCHED},
+                        {
+                            "$set": {
+                                "status": COMMAND_STATUS_FAILED,
+                                "completed_at": now,
+                                "failure_reason": reason,
+                                "last_error": reason,
+                            }
+                        },
+                    )
+                    if updated.modified_count > 0:
+                        summary["failed"] += 1
+                        DEVICE_COMMAND_FAILED_TOTAL.labels(
+                            command=command_name,
+                            reason="ack_timeout_exceeded",
+                        ).inc()
+            return summary
+        except Exception as exc:
+            logger.error("Recover stale device commands error: %s", exc)
+            return summary
+
+    async def count_commands_by_status(self) -> Dict[str, int]:
+        """Return current command counts grouped by status."""
+        if self.device_commands is None:
+            return {}
+        try:
+            pipeline = [
+                {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+            ]
+            results = await self.device_commands.aggregate(pipeline).to_list(length=None)
+            return {item["_id"] or "unknown": int(item["count"]) for item in results}
+        except Exception as exc:
+            logger.error("Count commands by status error: %s", exc)
+            return {}
 
     # ===== User methods =====
 
@@ -1173,7 +1303,7 @@ class Database:
             return 0
         try:
             return await self.device_commands.count_documents(
-                {"status": {"$in": ["pending", "retry_pending", "dispatched"]}}
+                {"status": {"$in": list(ACTIVE_COMMAND_STATUSES)}}
             )
         except Exception as exc:
             logger.error("Count pending commands error: %s", exc)

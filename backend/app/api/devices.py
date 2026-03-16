@@ -1,6 +1,7 @@
 """
 Device management REST API endpoints.
 """
+import logging
 from datetime import datetime, timedelta
 import secrets
 from typing import Optional
@@ -15,6 +16,7 @@ from ..utils.auth import hash_device_token, require_current_user, require_admin_
 from ..config import settings
 
 router = APIRouter(prefix="/api/v1", tags=["devices"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/devices/register")
@@ -405,9 +407,10 @@ async def get_device_summary(
     return await _build_device_summary(device_id, period, current_user)
 
 
-@router.get("/public/devices/{device_id}")
+@router.get("/public/devices/{device_id}", deprecated=True)
 async def get_public_device(device_id: str, current_user: dict = Depends(require_current_user)):
     """Authenticated device profile alias kept for backward compatibility."""
+    logger.warning("Deprecated public device endpoint used for device=%s", device_id)
     device = await ensure_device_access(current_user, device_id)
     return {
         "device_id": device.get("device_id"),
@@ -420,7 +423,7 @@ async def get_public_device(device_id: str, current_user: dict = Depends(require
     }
 
 
-@router.get("/public/devices/{device_id}/history")
+@router.get("/public/devices/{device_id}/history", deprecated=True)
 async def get_public_device_history(
     device_id: str,
     start_time: Optional[float] = None,
@@ -429,6 +432,7 @@ async def get_public_device_history(
     current_user: dict = Depends(require_current_user),
 ):
     """Authenticated history alias kept for backward compatibility."""
+    logger.warning("Deprecated public device history endpoint used for device=%s", device_id)
     await ensure_device_access(current_user, device_id)
     items = await db.get_readings_by_device(
         device_id=device_id,
@@ -439,12 +443,13 @@ async def get_public_device_history(
     return {"device_id": device_id, "count": len(items), "items": items}
 
 
-@router.get("/public/devices/{device_id}/latest")
+@router.get("/public/devices/{device_id}/latest", deprecated=True)
 async def get_public_device_latest(
     device_id: str,
     current_user: dict = Depends(require_current_user),
 ):
     """Authenticated latest-reading alias kept for backward compatibility."""
+    logger.warning("Deprecated public device latest endpoint used for device=%s", device_id)
     await ensure_device_access(current_user, device_id)
     latest = await db.get_latest_reading(device_id)
     if not latest:
@@ -452,7 +457,7 @@ async def get_public_device_latest(
     return latest
 
 
-@router.get("/public/devices/{device_id}/ecg")
+@router.get("/public/devices/{device_id}/ecg", deprecated=True)
 async def get_public_device_ecg(
     device_id: str,
     quality_filter: Optional[str] = Query(default=None, pattern="^(good|fair|poor)$"),
@@ -460,6 +465,7 @@ async def get_public_device_ecg(
     current_user: dict = Depends(require_current_user),
 ):
     """Authenticated ECG history alias kept for backward compatibility."""
+    logger.warning("Deprecated public device ECG endpoint used for device=%s", device_id)
     await ensure_device_access(current_user, device_id)
     items = await db.get_device_ecg_readings(
         device_id=device_id,
@@ -469,7 +475,7 @@ async def get_public_device_ecg(
     return {"device_id": device_id, "count": len(items), "items": items}
 
 
-@router.get("/public/devices/{device_id}/alerts")
+@router.get("/public/devices/{device_id}/alerts", deprecated=True)
 async def get_public_device_alerts(
     device_id: str,
     severity: Optional[str] = Query(default=None, pattern="^(info|warning|critical)$"),
@@ -478,6 +484,7 @@ async def get_public_device_alerts(
     current_user: dict = Depends(require_current_user),
 ):
     """Authenticated alert history alias kept for backward compatibility."""
+    logger.warning("Deprecated public device alerts endpoint used for device=%s", device_id)
     await ensure_device_access(current_user, device_id)
     items = await db.get_alerts_by_device(
         device_id=device_id,
@@ -488,13 +495,14 @@ async def get_public_device_alerts(
     return {"device_id": device_id, "count": len(items), "items": items}
 
 
-@router.get("/public/devices/{device_id}/summary")
+@router.get("/public/devices/{device_id}/summary", deprecated=True)
 async def get_public_device_summary(
     device_id: str,
     period: str = Query(default="24h", pattern="^(1h|6h|24h|7d|30d)$"),
     current_user: dict = Depends(require_current_user),
 ):
     """Authenticated summary alias kept for backward compatibility."""
+    logger.warning("Deprecated public device summary endpoint used for device=%s", device_id)
     return await _build_device_summary(device_id, period, current_user)
 
 

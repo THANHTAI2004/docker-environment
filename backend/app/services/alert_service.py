@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from ..config import settings
 from ..db import db
+from ..observability import ALERTS_CREATED_TOTAL
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +252,10 @@ class AlertService:
             alert_id = await db.insert_alert(alert)
             if alert_id:
                 logger.info("Alert generated: %s - %s", alert["alert_type"], alert["message"])
+                ALERTS_CREATED_TOTAL.labels(
+                    severity=alert["severity"],
+                    alert_type=alert["alert_type"],
+                ).inc()
                 inserted_alerts.append(alert)
 
         return inserted_alerts
