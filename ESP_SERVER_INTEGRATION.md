@@ -47,7 +47,7 @@ Content-Type: application/json
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/devices/register" \
-  -H "X-API-Key: $ADMIN_API_KEY" \
+  -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Content-Type: application/json" \
   -d '{
     "device_id": "dev-esp-001",
@@ -61,7 +61,7 @@ curl -X POST "$BASE_URL/api/v1/devices/register" \
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/devices/dev-esp-001/esp-token" \
-  -H "X-API-Key: $ADMIN_API_KEY"
+  -H "Authorization: Bearer $ADMIN_JWT"
 ```
 
 Response mẫu:
@@ -76,7 +76,7 @@ Response mẫu:
 Lưu ý:
 - Server chỉ trả token plain text đúng 1 lần tại thời điểm rotate.
 - Trong DB chỉ lưu hash token (`esp_token_hash`).
-- Hai endpoint chuẩn bị thiết bị ở mục 5 là admin-only, không dùng `API_KEY` đọc dữ liệu thông thường.
+- Hai endpoint chuẩn bị thiết bị ở mục 5 là admin-only và hiện yêu cầu admin JWT.
 - App/request ECG phía người dùng cuối đã chuyển sang JWT Bearer + RBAC.
 
 ## 6. API ESP chi tiết

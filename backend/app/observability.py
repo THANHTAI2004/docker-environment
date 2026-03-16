@@ -47,6 +47,9 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "request_id": request_id_ctx.get(),
         }
+        extra_fields = getattr(record, "extra_fields", None)
+        if isinstance(extra_fields, dict):
+            payload.update(extra_fields)
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=True)

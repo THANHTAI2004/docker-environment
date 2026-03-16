@@ -16,6 +16,8 @@ App dang nhap bang tai khoan nguoi dung, sau do gui JWT o header:
 Authorization: Bearer <access_token>
 ```
 
+Server cũng trả `refresh_token` opaque ở login. App nên lưu an toàn và gọi `POST /api/v1/auth/refresh` khi access token hết hạn.
+
 ### Dang nhap
 
 `POST /api/v1/auth/login`
@@ -34,13 +36,36 @@ Response:
 ```json
 {
   "access_token": "<jwt>",
+  "refresh_token": "<opaque-refresh-token>",
   "token_type": "bearer",
   "expires_at": "2026-03-13T11:55:37.198839+00:00",
+  "refresh_expires_at": "2026-04-12T11:55:37.198839+00:00",
+  "session_id": "session-id",
   "user_id": "patient-001",
   "role": "patient",
   "scopes": ["patient"]
 }
 ```
+
+### Refresh token
+
+`POST /api/v1/auth/refresh`
+
+Request:
+
+```json
+{
+  "refresh_token": "<opaque-refresh-token>"
+}
+```
+
+### Logout
+
+`POST /api/v1/auth/logout`
+
+Ghi chu:
+- can `Authorization: Bearer <access_token>`
+- server revoke session hien tai, access token va refresh token cua session do se mat hieu luc
 
 ### Lay profile nguoi dung dang dang nhap
 

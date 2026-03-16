@@ -36,6 +36,10 @@ async def create_user(
             "actor_role": principal["role"],
             "target_id": user.user_id,
             "request_id": request.state.request_id,
+            "details": {
+                "auth_type": principal.get("auth_type"),
+                "bootstrap_path": principal.get("auth_type") == "api_key",
+            },
         }
     )
     

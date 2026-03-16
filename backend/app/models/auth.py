@@ -16,11 +16,25 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     """JWT response returned after a successful login."""
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     expires_at: datetime
+    refresh_expires_at: datetime
+    session_id: str
     user_id: str
     role: str
     scopes: List[str] = Field(default_factory=list)
+
+
+class RefreshRequest(BaseModel):
+    """Refresh-token payload used to rotate a session."""
+    refresh_token: str = Field(..., min_length=32)
+
+
+class LogoutResponse(BaseModel):
+    """Response returned after a successful logout."""
+    status: str = "success"
+    session_id: str
 
 
 class AuthenticatedUser(BaseModel):
@@ -28,6 +42,7 @@ class AuthenticatedUser(BaseModel):
     user_id: str
     role: str
     auth_type: str = "jwt"
+    session_id: str
     caregivers: List[str] = Field(default_factory=list)
     is_active: bool = True
     email: Optional[str] = None

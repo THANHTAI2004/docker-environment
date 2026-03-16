@@ -28,6 +28,7 @@ Biến môi trường tối thiểu:
 ```env
 API_BASE_URL=https://api.example.com
 JWT_ACCESS_TOKEN=<login-response-access-token>
+REFRESH_TOKEN=<login-response-refresh-token>
 ADMIN_API_KEY=replace-with-admin-api-key
 USER_ID=user-001
 DEVICE_ID=dev-esp-001
@@ -44,12 +45,15 @@ Content-Type: application/json
 
 Quy ước quyền:
 - JWT Bearer: dùng cho app/web/admin sau khi login.
-- `ADMIN_API_KEY`: chỉ dùng cho bootstrap/break-glass ở một số endpoint admin-only.
+- `refresh_token`: dùng để lấy access token mới qua `POST /api/v1/auth/refresh`.
+- `ADMIN_API_KEY`: chỉ dùng cho bootstrap/break-glass có kiểm soát.
 
 ## 4. Danh sách endpoint App cần dùng
 
 ## 4.1 User
 - `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`
 - `GET /api/v1/auth/me`
 - `POST /api/v1/users`
 - `GET /api/v1/users/{user_id}`
@@ -72,9 +76,9 @@ Quy ước quyền:
 - `POST /api/v1/devices/{device_id}/ecg/request`
 
 Endpoint admin-only:
-- `POST /api/v1/users`
-- `PATCH /api/v1/users/{user_id}/thresholds`
-- `POST /api/v1/devices/register`
+- `POST /api/v1/users`: có thể dùng `ADMIN_API_KEY` chỉ khi `ALLOW_ADMIN_API_KEY_BOOTSTRAP=true`
+- `PATCH /api/v1/users/{user_id}/thresholds`: cần admin JWT
+- `POST /api/v1/devices/register`: cần admin JWT
 
 ## 4.4 Alerts
 - `GET /api/v1/users/{user_id}/alerts`
@@ -316,7 +320,7 @@ Sau đó truy cập:
 
 1. App login thành công và gửi đúng `Authorization: Bearer <JWT>` cho request dữ liệu.
 2. `GET /ready` hoạt động trước khi test chức năng.
-3. App dùng `ADMIN_API_KEY` đúng cho các endpoint admin-only nếu cần bootstrap.
+3. App chỉ dùng `ADMIN_API_KEY` cho bootstrap có kiểm soát; các route admin thường ngày nên dùng admin JWT.
 4. Luồng ingest từ ESP đã có dữ liệu trước khi test màn hình latest/vitals.
 5. Luồng ECG request -> poll result chạy end-to-end thành công.
 6. Kiểm tra trường hợp lỗi 401/403/404/422/429/500 có thông báo rõ ràng.

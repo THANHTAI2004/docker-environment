@@ -6,7 +6,7 @@ from .alert import Alert, AlertDB, AlertAcknowledge
 from .device import Device, DeviceDB, DeviceRegistration, ECGRequestCommand, ESPCommandAck
 from .link import DeviceLink, DeviceLinkDB, DeviceLinkRequest
 from .user import User, UserDB, UserCreate, ThresholdsUpdate, AlertThresholds
-from .auth import AuthenticatedUser, LoginRequest, TokenResponse
+from .auth import AuthenticatedUser, LoginRequest, LogoutResponse, RefreshRequest, TokenResponse
 
 __all__ = [
     "HealthReading",
@@ -31,5 +31,7 @@ __all__ = [
     "AlertThresholds",
     "AuthenticatedUser",
     "LoginRequest",
+    "RefreshRequest",
+    "LogoutResponse",
     "TokenResponse",
 ]

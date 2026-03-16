@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta, timezone
+
+import jwt
 import pytest
 
 from app.utils.auth import hash_password
@@ -20,6 +23,192 @@ async def test_metrics_are_disabled_by_default(client):
     response = await client.get("/metrics")
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_login_returns_refresh_token_and_session_id(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"user_id": "patient-001", "password": "PatientPass1"},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["token_type"] == "bearer"
+    assert body["access_token"]
+    assert body["refresh_token"]
+    assert body["session_id"]
+    assert body["user_id"] == "patient-001"
+
+
+@pytest.mark.asyncio
+async def test_refresh_rotates_token_and_invalidates_old_refresh(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"user_id": "patient-001", "password": "PatientPass1"},
+    )
+    login_body = login.json()
+
+    refresh = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": login_body["refresh_token"]},
+    )
+    refresh_body = refresh.json()
+
+    reused = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": login_body["refresh_token"]},
+    )
+
+    assert login.status_code == 200
+    assert refresh.status_code == 200
+    assert refresh_body["session_id"] == login_body["session_id"]
+    assert refresh_body["refresh_token"] != login_body["refresh_token"]
+    assert refresh_body["access_token"] != login_body["access_token"]
+    assert reused.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_current_session(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_user(user_id):
+        user = users.get(user_id)
+        if not user:
+            return None
+        sanitized = dict(user)
+        sanitized.pop("password_hash", None)
+        return sanitized
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"user_id": "patient-001", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    logout = await client.post(
+        "/api/v1/auth/logout",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    me = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert login.status_code == 200
+    assert logout.status_code == 200
+    assert me.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_expired_access_token_is_rejected(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_auth_session(session_id):
+        return {
+            "session_id": session_id,
+            "user_id": "patient-001",
+            "expires_at": datetime.utcnow() + timedelta(days=1),
+        }
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_auth_session", fake_get_auth_session)
+
+    expired_token = jwt.encode(
+        {
+            "sub": "patient-001",
+            "role": "patient",
+            "sid": "expired-session",
+            "token_type": "access",
+            "iat": datetime.now(timezone.utc) - timedelta(hours=2),
+            "exp": datetime.now(timezone.utc) - timedelta(hours=1),
+        },
+        app_module.settings.jwt_secret,
+        algorithm=app_module.settings.jwt_algorithm,
+    )
+
+    response = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {expired_token}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["message"] == "Access token expired"
 
 
 @pytest.mark.asyncio

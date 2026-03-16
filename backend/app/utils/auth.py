@@ -1,12 +1,12 @@
 """
-Authentication helpers for JWT, API-key bootstrap, and device tokens.
+Authentication helpers for JWT, refresh-token sessions, API-key bootstrap, and device tokens.
 """
 import base64
 import hashlib
 import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import jwt
 from fastapi import Header, HTTPException, Request, status
@@ -21,6 +21,10 @@ def _matches_secret(provided: str | None, expected: str) -> bool:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _db_now() -> datetime:
+    return datetime.utcnow()
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
@@ -56,14 +60,17 @@ def verify_password(password: str, encoded: str | None) -> bool:
         return False
 
 
-def create_access_token(user: Dict[str, Any]) -> tuple[str, datetime]:
-    """Create a signed JWT for one authenticated user."""
-    expires_at = _utc_now() + timedelta(minutes=settings.jwt_access_token_exp_minutes)
+def create_access_token(user: Dict[str, Any], session_id: str) -> tuple[str, datetime]:
+    """Create a signed JWT for one authenticated user session."""
+    issued_at = _utc_now()
+    expires_at = issued_at + timedelta(minutes=settings.jwt_access_token_exp_minutes)
     payload = {
         "sub": user["user_id"],
         "role": user["role"],
+        "sid": session_id,
+        "token_type": "access",
         "exp": expires_at,
-        "iat": _utc_now(),
+        "iat": issued_at,
     }
     return (
         jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm),
@@ -72,9 +79,9 @@ def create_access_token(user: Dict[str, Any]) -> tuple[str, datetime]:
 
 
 def decode_access_token(token: str) -> Dict[str, Any]:
-    """Validate and decode a JWT."""
+    """Validate and decode an access JWT."""
     try:
-        return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except jwt.ExpiredSignatureError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -85,6 +92,14 @@ def decode_access_token(token: str) -> Dict[str, Any]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid access token",
         ) from exc
+
+    token_type = payload.get("token_type") or "access"
+    if token_type != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid access token",
+        )
+    return payload
 
 
 def peek_token_subject(authorization: str | None) -> str | None:
@@ -104,6 +119,106 @@ def peek_token_subject(authorization: str | None) -> str | None:
         return payload.get("sub")
     except jwt.InvalidTokenError:
         return None
+
+
+def generate_refresh_token() -> str:
+    """Generate an opaque refresh token that can be rotated and revoked."""
+    return secrets.token_urlsafe(48)
+
+
+def hash_refresh_token(token: str) -> str:
+    """Hash refresh tokens before storing them in MongoDB."""
+    raw = f"{settings.refresh_token_secret}:{token}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _is_active_session(session: Dict[str, Any] | None) -> bool:
+    if not session:
+        return False
+    if session.get("revoked_at") is not None:
+        return False
+    expires_at = session.get("expires_at")
+    if isinstance(expires_at, datetime) and expires_at <= _db_now():
+        return False
+    return True
+
+
+async def issue_session_tokens(user: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a persisted session and return fresh access + refresh tokens."""
+    session_id = secrets.token_urlsafe(18)
+    refresh_token = generate_refresh_token()
+    refresh_expires_at = _db_now() + timedelta(days=settings.jwt_refresh_token_exp_days)
+    created = await db.create_auth_session(
+        {
+            "session_id": session_id,
+            "user_id": user["user_id"],
+            "role": user["role"],
+            "refresh_token_hash": hash_refresh_token(refresh_token),
+            "expires_at": refresh_expires_at,
+        }
+    )
+    if not created:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create auth session",
+        )
+
+    access_token, expires_at = create_access_token(user, session_id)
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "expires_at": expires_at.isoformat(),
+        "refresh_expires_at": refresh_expires_at.replace(tzinfo=timezone.utc).isoformat(),
+        "session_id": session_id,
+        "user_id": user["user_id"],
+        "role": user["role"],
+        "scopes": [user["role"]],
+    }
+
+
+async def rotate_refresh_session(refresh_token: str) -> Dict[str, Any]:
+    """Rotate one refresh token and issue a new access token for the same session."""
+    session = await db.get_auth_session_by_refresh_token_hash(hash_refresh_token(refresh_token))
+    if not _is_active_session(session):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+
+    user = await db.get_user_auth(session["user_id"])
+    if not user or not user.get("is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User is inactive or not found",
+        )
+
+    new_refresh_token = generate_refresh_token()
+    refresh_expires_at = _db_now() + timedelta(days=settings.jwt_refresh_token_exp_days)
+    rotated = await db.rotate_auth_session(
+        session_id=session["session_id"],
+        current_refresh_token_hash=session["refresh_token_hash"],
+        new_refresh_token_hash=hash_refresh_token(new_refresh_token),
+        expires_at=refresh_expires_at,
+    )
+    if not rotated:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+
+    access_token, expires_at = create_access_token(user, session["session_id"])
+    return {
+        "access_token": access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "bearer",
+        "expires_at": expires_at.isoformat(),
+        "refresh_expires_at": refresh_expires_at.replace(tzinfo=timezone.utc).isoformat(),
+        "session_id": session["session_id"],
+        "user_id": user["user_id"],
+        "role": user["role"],
+        "scopes": [user["role"]],
+    }
 
 
 async def require_api_key(x_api_key: str | None = Header(default=None)):
@@ -144,7 +259,7 @@ async def require_admin_api_key(x_api_key: str | None = Header(default=None)):
 
 
 async def require_current_user(authorization: str | None = Header(default=None)) -> Dict[str, Any]:
-    """Require a valid bearer token and resolve the backing user record."""
+    """Require a valid bearer token, user record, and active session."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -160,7 +275,8 @@ async def require_current_user(authorization: str | None = Header(default=None))
 
     payload = decode_access_token(token)
     user_id = payload.get("sub")
-    if not user_id:
+    session_id = payload.get("sid")
+    if not user_id or not session_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid access token",
@@ -172,7 +288,16 @@ async def require_current_user(authorization: str | None = Header(default=None))
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User is inactive or not found",
         )
+
+    session = await db.get_auth_session(session_id)
+    if not _is_active_session(session) or session.get("user_id") != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired or revoked",
+        )
+
     user["auth_type"] = "jwt"
+    user["session_id"] = session_id
     return user
 
 
@@ -208,25 +333,37 @@ async def require_metrics_access(
     request: Request,
     x_metrics_token: str | None = Header(default=None),
 ) -> None:
-    """Protect metrics behind an explicit enable flag and optional token."""
+    """Protect metrics behind an explicit enable flag, token, and allowlist."""
     if not settings.expose_metrics:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    if settings.metrics_token:
-        if _matches_secret(x_metrics_token, settings.metrics_token):
+    client_host = request.client.host if request.client else None
+    allowed_hosts = {
+        item.strip()
+        for item in settings.metrics_allow_ips.split(",")
+        if item.strip()
+    }
+
+    if settings.metrics_token and _matches_secret(x_metrics_token, settings.metrics_token):
+        if client_host in allowed_hosts:
             return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Metrics source IP not allowed",
+        )
+
+    if client_host in allowed_hosts:
+        return
+
+    if settings.metrics_token:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Metrics token required",
         )
 
-    client_host = request.client.host if request.client else None
-    if client_host in {"127.0.0.1", "::1", "localhost"}:
-        return
-
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Metrics available only from localhost or with token",
+        detail="Metrics available only from allowed internal IPs",
     )
 
 

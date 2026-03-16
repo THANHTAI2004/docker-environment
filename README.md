@@ -157,11 +157,12 @@ pip install -r requirements.txt
 
 Biến môi trường cần thiết:
 - Mongo: `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD`, `MONGO_HOST_PORT`, `MONGO_BIND_IP`
-- API/Auth: `API_KEY`, `ADMIN_API_KEY`, `DEVICE_TOKEN_SECRET`, `JWT_SECRET`
+- API/Auth: `API_KEY`, `ADMIN_API_KEY`, `DEVICE_TOKEN_SECRET`, `JWT_SECRET`, `REFRESH_TOKEN_SECRET`
 - Backend: `BACKEND_HOST_PORT`, `BACKEND_BIND_IP`, `EXPOSE_API_DOCS`
 - CORS: `CORS_ALLOW_ORIGINS`, `CORS_ALLOW_ORIGIN_REGEX`
 - Rate-limit: `RATE_LIMIT_ENABLED`, `RATE_LIMIT_STORAGE`, `REDIS_URL`, `RATE_LIMIT_GENERAL_PER_MINUTE`, `RATE_LIMIT_ESP_PER_MINUTE`
 - Command queue: `COMMAND_TTL_SECONDS`
+- Metrics: `EXPOSE_METRICS`, `METRICS_TOKEN`, `METRICS_ALLOW_IPS`
 - Cloudflare (optional): `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARE_PUBLIC_URL`
 
 Port chạy:
@@ -171,7 +172,8 @@ Port chạy:
 
 Key/token:
 - `Authorization: Bearer <JWT>` cho app/admin.
-- `ADMIN_API_KEY` là bootstrap/break-glass secret cho một số endpoint admin-only.
+- `refresh_token` opaque được rotate qua `POST /api/v1/auth/refresh`.
+- `ADMIN_API_KEY` là bootstrap/break-glass secret chỉ dành cho bootstrap có kiểm soát.
 - `X-Device-Token` cho ESP.
 - Token thiết bị được hash (`sha256(secret:token)`) trước khi lưu vào DB.
 
@@ -242,6 +244,8 @@ Các endpoint chính:
 
 App/Admin (`/api/v1`):
 - `POST /auth/login`
+- `POST /auth/refresh`
+- `POST /auth/logout`
 - `GET /auth/me`
 - `POST /users`
 - `GET /users/{user_id}`
@@ -263,7 +267,7 @@ App/Admin (`/api/v1`):
 - `POST /health/readings` (test/manual ingest)
 
 Ghi chú quyền:
-- Endpoint bootstrap/break-glass admin: `POST /users`, `POST /devices/register`, `POST /devices/{device_id}/esp-token`, `POST /devices/{device_id}/commands/{command_id}/cancel`, `POST /health/readings`, `POST /readings`
+- Endpoint bootstrap/break-glass admin: `POST /users` khi `ALLOW_ADMIN_API_KEY_BOOTSTRAP=true`
 - App/Web thường dùng JWT Bearer cho đọc dữ liệu và request ECG.
 - RBAC: `admin` xem toàn bộ, `patient` chỉ xem dữ liệu của chính mình, `caregiver` chỉ xem patient được gán.
 
@@ -301,7 +305,7 @@ POST /api/v1/esp/devices/dev-001/readings
 
 Xác thực:
 - App/Admin: JWT Bearer qua `Authorization`.
-- Một số endpoint admin-only hỗ trợ `ADMIN_API_KEY` làm bootstrap/break-glass.
+- Chỉ endpoint bootstrap tạo user hỗ trợ `ADMIN_API_KEY` khi `ALLOW_ADMIN_API_KEY_BOOTSTRAP=true`.
 - ESP: bắt buộc header `X-Device-Token`.
 
 Mã lỗi thường gặp:
@@ -328,6 +332,7 @@ Collection chính:
 - `devices`
 - `users`
 - `alerts`
+- `auth_sessions`
 - `readings` (legacy)
 
 Schema dữ liệu (rút gọn):
@@ -386,6 +391,7 @@ API key, JWT, token thiết bị:
 - API key: env `API_KEY` chỉ dùng cho compatibility nội bộ nếu cần.
 - Admin key: env `ADMIN_API_KEY` cho bootstrap/break-glass.
 - JWT: access token ký bằng `JWT_SECRET`.
+- Refresh token: hash bằng `REFRESH_TOKEN_SECRET`, lưu trong `auth_sessions`, rotate theo mỗi lần refresh.
 - Device token: cấp qua endpoint rotate token, lưu dưới dạng hash trong DB.
 
 CORS:

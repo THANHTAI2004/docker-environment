@@ -33,6 +33,7 @@ jobs:
           ADMIN_API_KEY: ci-admin-api-key
           DEVICE_TOKEN_SECRET: ci-device-token-secret
           JWT_SECRET: ci-jwt-secret
+          REFRESH_TOKEN_SECRET: ci-refresh-token-secret
           MONGO_URI: mongodb://admin:ci-password@mongodb:27017
           RATE_LIMIT_STORAGE: memory
         run: pytest tests -q

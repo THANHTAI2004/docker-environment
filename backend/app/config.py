@@ -15,8 +15,10 @@ class Settings(BaseSettings):
     admin_api_key: str = "change-this-admin-api-key"
     device_token_secret: str = "change-this-device-token-secret"
     jwt_secret: str = "change-this-jwt-secret"
+    refresh_token_secret: str = "change-this-refresh-token-secret"
     jwt_algorithm: str = "HS256"
     jwt_access_token_exp_minutes: int = 60
+    jwt_refresh_token_exp_days: int = 30
     cors_allow_origins: str = (
         "https://app.eldercare.io.vn,"
         "https://admin.eldercare.io.vn,"
@@ -33,6 +35,7 @@ class Settings(BaseSettings):
     expose_api_docs: bool = False
     expose_metrics: bool = False
     metrics_token: str = ""
+    metrics_allow_ips: str = "127.0.0.1,::1,localhost"
     allow_admin_api_key_bootstrap: bool = False
     log_json: bool = True
     device_clock_skew_tolerance_seconds: int = 300
@@ -50,6 +53,7 @@ class Settings(BaseSettings):
     mongo_commands_collection: str = "device_commands"
     mongo_audit_collection: str = "audit_logs"
     mongo_device_links_collection: str = "device_links"
+    mongo_auth_sessions_collection: str = "auth_sessions"
     command_ttl_seconds: int = 300
     command_ack_timeout_seconds: int = 45
     command_max_dispatch_count: int = 3
@@ -99,10 +103,21 @@ class Settings(BaseSettings):
             invalid.append("DEVICE_TOKEN_SECRET")
         if self.jwt_secret in {"", "change-this-jwt-secret"}:
             invalid.append("JWT_SECRET")
+        if self.refresh_token_secret in {"", "change-this-refresh-token-secret"}:
+            invalid.append("REFRESH_TOKEN_SECRET")
         if self.admin_api_key == self.api_key:
             invalid.append("ADMIN_API_KEY must differ from API_KEY")
         if self.jwt_secret in {self.api_key, self.admin_api_key, self.device_token_secret}:
             invalid.append("JWT_SECRET must differ from API_KEY, ADMIN_API_KEY, DEVICE_TOKEN_SECRET")
+        if self.refresh_token_secret in {
+            self.api_key,
+            self.admin_api_key,
+            self.device_token_secret,
+            self.jwt_secret,
+        }:
+            invalid.append(
+                "REFRESH_TOKEN_SECRET must differ from API_KEY, ADMIN_API_KEY, DEVICE_TOKEN_SECRET, JWT_SECRET"
+            )
 
         mongo_password = urlsplit(self.mongo_uri).password or ""
         if mongo_password in {"", "change-this-mongo-password", "SecurePassword2026!"}:

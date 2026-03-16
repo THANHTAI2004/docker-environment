@@ -42,6 +42,7 @@ services:
       - API_KEY=${API_KEY:?API_KEY is required}
       - ADMIN_API_KEY=${ADMIN_API_KEY:?ADMIN_API_KEY is required}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET:?REFRESH_TOKEN_SECRET is required}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://app.eldercare.io.vn,https://admin.eldercare.io.vn,http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000}
       - CORS_ALLOW_ORIGIN_REGEX=${CORS_ALLOW_ORIGIN_REGEX-}
       - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
@@ -53,6 +54,7 @@ services:
       - EXPOSE_API_DOCS=${EXPOSE_API_DOCS:-false}
       - EXPOSE_METRICS=${EXPOSE_METRICS:-false}
       - METRICS_TOKEN=${METRICS_TOKEN-}
+      - METRICS_ALLOW_IPS=${METRICS_ALLOW_IPS:-127.0.0.1,::1,localhost}
       - ALLOW_ADMIN_API_KEY_BOOTSTRAP=${ALLOW_ADMIN_API_KEY_BOOTSTRAP:-false}
     restart: unless-stopped
     security_opt:

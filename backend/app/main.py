@@ -3,6 +3,7 @@ FastAPI backend for wearable health monitoring system.
 REST API + MongoDB for health data management.
 """
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -29,7 +30,12 @@ from .observability import (
     set_request_id,
 )
 from .utils.access import ensure_device_access
-from .utils.auth import require_admin_principal, require_current_user, require_metrics_access
+from .utils.auth import (
+    peek_token_subject,
+    require_admin_principal,
+    require_current_user,
+    require_metrics_access,
+)
 from .utils.rate_limit import RateLimiter
 
 # Import API routers
@@ -40,6 +46,19 @@ from .api import auth_router, health_router, alerts_router, devices_router, user
 configure_logging(settings.log_json)
 logger = logging.getLogger(__name__)
 rate_limiter = RateLimiter()
+
+
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", request.headers.get("x-request-id") or "-")
+
+
+def _request_device_id(path: str) -> str | None:
+    parts = [part for part in path.split("/") if part]
+    try:
+        idx = parts.index("devices")
+        return parts[idx + 1]
+    except Exception:
+        return None
 
 
 # ===== Startup/Shutdown Lifespan =====
@@ -126,38 +145,88 @@ async def request_context_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
+    started_at = time.perf_counter()
     allowed, remaining, category = await rate_limiter.check(request)
     if not allowed:
+        request_id = _request_id(request)
         RATE_LIMIT_HITS.labels(category=category).inc()
         REQUEST_COUNT.labels(
             method=request.method,
             path=request.url.path,
             status_code=str(status.HTTP_429_TOO_MANY_REQUESTS),
         ).inc()
-        logger.warning("Rate limit exceeded for path=%s category=%s", request.url.path, category)
+        logger.warning(
+            "Rate limit exceeded",
+            extra={
+                "extra_fields": {
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": status.HTTP_429_TOO_MANY_REQUESTS,
+                    "category": category,
+                    "client_ip": request.client.host if request.client else None,
+                    "user_id": peek_token_subject(request.headers.get("authorization")),
+                    "device_id": _request_device_id(request.url.path),
+                }
+            },
+        )
         return JSONResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            content={"message": "Too many requests"},
-            headers={"Retry-After": "60"},
+            content={"message": "Too many requests", "request_id": request_id},
+            headers={"Retry-After": "60", "X-Request-ID": request_id},
         )
 
     with REQUEST_LATENCY.labels(method=request.method, path=request.url.path).time():
         response = await call_next(request)
+    latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
     REQUEST_COUNT.labels(
         method=request.method,
         path=request.url.path,
         status_code=str(response.status_code),
     ).inc()
+    logger.info(
+        "Request completed",
+        extra={
+            "extra_fields": {
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "latency_ms": latency_ms,
+                "client_ip": request.client.host if request.client else None,
+                "user_id": peek_token_subject(request.headers.get("authorization")),
+                "device_id": _request_device_id(request.url.path),
+            }
+        },
+    )
     if settings.rate_limit_enabled:
         response.headers["X-RateLimit-Remaining"] = str(remaining)
     return response
 
 # Custom exception handlers
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Return a stable error schema for FastAPI HTTP errors."""
+    detail = exc.detail
+    message = detail if isinstance(detail, str) else "Request failed"
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "message": message,
+            "detail": detail,
+            "request_id": _request_id(request),
+        },
+        headers=getattr(exc, "headers", None),
+    )
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Handle validation errors with detailed messages."""
-    logger.warning(f"Validation error on {request.url}: {exc.errors()}")
-    content = {"detail": exc.errors(), "message": "Invalid request data"}
+    logger.warning("Validation error on %s: %s", request.url, exc.errors())
+    content = {
+        "detail": exc.errors(),
+        "message": "Invalid request data",
+        "request_id": _request_id(request),
+    }
     if settings.expose_error_details:
         content["body"] = exc.body
     return JSONResponse(
@@ -168,13 +237,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """Handle unexpected errors."""
-    logger.error(f"Unexpected error on {request.url}: {str(exc)}", exc_info=True)
+    logger.error("Unexpected error on %s: %s", request.url, str(exc), exc_info=True)
     detail = str(exc) if settings.expose_error_details else "Contact administrator"
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
             "message": "Internal server error",
             "detail": detail,
+            "request_id": _request_id(request),
         },
     )
 
@@ -248,6 +318,10 @@ async def post_reading(r: Reading, _: dict = Depends(require_admin_principal)):
     """
     Post a sensor reading (legacy endpoint for backwards compatibility).
     """
+    logger.warning(
+        "Legacy endpoint used",
+        extra={"extra_fields": {"path": "/readings", "device_id": r.device_id}},
+    )
     doc = r.dict()
     doc["received_at"] = datetime.utcnow()
     
@@ -268,6 +342,10 @@ async def get_history(
     """
     Get historical readings for a device (legacy endpoint).
     """
+    logger.warning(
+        "Legacy endpoint used",
+        extra={"extra_fields": {"path": f"/history/{device_id}", "device_id": device_id}},
+    )
     await ensure_device_access(current_user, device_id)
     items = await db.get_legacy_readings_by_device(device_id, limit)
     

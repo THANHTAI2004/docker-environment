@@ -34,6 +34,7 @@ class Database:
         self.device_commands = None
         self.audit_logs = None
         self.device_links = None
+        self.auth_sessions = None
 
     def connect(self):
         """Initialize MongoDB connection and collection references."""
@@ -47,6 +48,7 @@ class Database:
         self.device_commands = self.db[settings.mongo_commands_collection]
         self.audit_logs = self.db[settings.mongo_audit_collection]
         self.device_links = self.db[settings.mongo_device_links_collection]
+        self.auth_sessions = self.db[settings.mongo_auth_sessions_collection]
 
     async def _ensure_ttl_index(
         self,
@@ -139,6 +141,16 @@ class Database:
             await self.device_links.create_index([("device_id", 1), ("linked_at", -1)])
             await self.device_links.create_index([("device_id", 1), ("link_role", 1)])
 
+            # Auth sessions
+            await self.auth_sessions.create_index([("session_id", 1)], unique=True)
+            await self.auth_sessions.create_index([("user_id", 1), ("created_at", -1)])
+            await self.auth_sessions.create_index([("refresh_token_hash", 1)], unique=True, sparse=True)
+            await self._ensure_ttl_index(
+                self.auth_sessions,
+                [("expires_at", 1)],
+                ttl_seconds=0,
+            )
+
             logger.info("MongoDB indexes created successfully")
         except Exception as exc:
             logger.error("Index creation error: %s", exc)
@@ -162,6 +174,8 @@ class Database:
             "completed_at",
             "linked_at",
             "updated_at",
+            "last_refreshed_at",
+            "revoked_at",
         ):
             if isinstance(output.get(field), datetime):
                 output[field] = output[field].isoformat()
@@ -1045,6 +1059,112 @@ class Database:
             return True
         except Exception as exc:
             logger.error("Audit log insert error: %s", exc)
+            return False
+
+    # ===== Auth session methods =====
+
+    async def create_auth_session(self, doc: Dict[str, Any]) -> bool:
+        """Persist one login session for refresh-token rotation and revocation."""
+        if self.auth_sessions is None:
+            return False
+        try:
+            payload = dict(doc)
+            now = datetime.utcnow()
+            payload.setdefault("created_at", now)
+            payload.setdefault("last_refreshed_at", now)
+            await self.auth_sessions.insert_one(payload)
+            return True
+        except DuplicateKeyError:
+            logger.warning("Auth session duplicate for session_id=%s", doc.get("session_id"))
+            return False
+        except Exception as exc:
+            logger.error("Auth session creation error: %s", exc)
+            return False
+
+    async def get_auth_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch one auth session by session ID."""
+        if self.auth_sessions is None:
+            return None
+        try:
+            return await self.auth_sessions.find_one({"session_id": session_id})
+        except Exception as exc:
+            logger.error("Auth session get error: %s", exc)
+            return None
+
+    async def get_auth_session_by_refresh_token_hash(
+        self,
+        refresh_token_hash: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch one active auth session by current refresh-token hash."""
+        if self.auth_sessions is None:
+            return None
+        try:
+            return await self.auth_sessions.find_one({"refresh_token_hash": refresh_token_hash})
+        except Exception as exc:
+            logger.error("Auth session refresh lookup error: %s", exc)
+            return None
+
+    async def rotate_auth_session(
+        self,
+        session_id: str,
+        current_refresh_token_hash: str,
+        new_refresh_token_hash: str,
+        expires_at: datetime,
+    ) -> bool:
+        """Rotate the refresh token for one active session."""
+        if self.auth_sessions is None:
+            return False
+        try:
+            now = datetime.utcnow()
+            result = await self.auth_sessions.update_one(
+                {
+                    "session_id": session_id,
+                    "refresh_token_hash": current_refresh_token_hash,
+                    "revoked_at": {"$exists": False},
+                    "expires_at": {"$gt": now},
+                },
+                {
+                    "$set": {
+                        "refresh_token_hash": new_refresh_token_hash,
+                        "expires_at": expires_at,
+                        "last_refreshed_at": now,
+                    }
+                },
+            )
+            return result.modified_count > 0
+        except DuplicateKeyError:
+            logger.warning("Auth session rotate collision for session_id=%s", session_id)
+            return False
+        except Exception as exc:
+            logger.error("Auth session rotate error: %s", exc)
+            return False
+
+    async def revoke_auth_session(
+        self,
+        session_id: str,
+        reason: str,
+        revoked_by: Optional[str] = None,
+    ) -> bool:
+        """Revoke one active session so access and refresh tokens stop working."""
+        if self.auth_sessions is None:
+            return False
+        try:
+            result = await self.auth_sessions.update_one(
+                {
+                    "session_id": session_id,
+                    "revoked_at": {"$exists": False},
+                },
+                {
+                    "$set": {
+                        "revoked_at": datetime.utcnow(),
+                        "revoked_reason": reason,
+                        "revoked_by": revoked_by,
+                    }
+                },
+            )
+            return result.modified_count > 0
+        except Exception as exc:
+            logger.error("Auth session revoke error: %s", exc)
             return False
 
     async def count_pending_commands(self) -> int:
