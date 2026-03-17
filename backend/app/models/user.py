@@ -1,7 +1,7 @@
 """
 User data models.
 """
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional, List, Dict, Literal
 from pydantic import BaseModel, ConfigDict, Field, EmailStr
 
@@ -52,6 +52,8 @@ class User(BaseModel):
     role: Literal["admin", "caregiver", "patient"] = Field(..., description="admin, caregiver, or patient")
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    phone_number: Optional[str] = None
+    date_of_birth: Optional[date] = None
     is_active: bool = True
     
     # Health profile (for patients)
@@ -84,6 +86,8 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=8)
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    phone_number: Optional[str] = None
+    date_of_birth: Optional[date] = None
     age: Optional[int] = None
     gender: Optional[str] = None
     caregivers: List[str] = Field(default_factory=list)

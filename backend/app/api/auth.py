@@ -1,30 +1,91 @@
 """
 JWT authentication endpoints.
 """
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..db import db
-from ..models import LoginRequest, RefreshRequest
+from ..models import LoginRequest, PhoneLoginRequest, RefreshRequest, RegisterRequest
 from ..observability import AUTH_LOGIN_TOTAL, AUTH_REVOKED_SESSIONS_TOTAL
 from ..utils.auth import (
+    hash_password,
     issue_session_tokens,
     require_current_user,
     rotate_refresh_session,
     verify_password,
 )
+from ..utils.phone import normalize_phone_number
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
+@router.post("/register")
+async def register(payload: RegisterRequest, request: Request):
+    """Register a new patient account using a phone number and password."""
+    name = payload.name.strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name must be at least 2 characters")
+    if payload.date_of_birth > date.today():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Date of birth cannot be in the future")
+
+    try:
+        normalized_phone = normalize_phone_number(payload.phone_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if await db.phone_exists(normalized_phone):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number already registered")
+
+    user_id = await db.generate_patient_user_id()
+    created = await db.create_user_with_phone(
+        {
+            "user_id": user_id,
+            "name": name,
+            "phone_number": normalized_phone,
+            "date_of_birth": payload.date_of_birth.isoformat(),
+            "password_hash": hash_password(payload.password),
+            "role": "patient",
+            "is_active": True,
+        }
+    )
+    if not created:
+        if await db.phone_exists(normalized_phone):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number already registered")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User registration failed")
+
+    await db.insert_audit_log(
+        {
+            "action": "auth.register",
+            "actor_id": user_id,
+            "actor_role": "patient",
+            "target_id": user_id,
+            "request_id": request.state.request_id,
+        }
+    )
+    return {"status": "success", "user_id": user_id}
+
+
 @router.post("/login")
-async def login(payload: LoginRequest, request: Request):
+async def login(payload: PhoneLoginRequest | LoginRequest, request: Request):
     """Exchange user credentials for access + refresh tokens."""
-    user = await db.get_user_auth(payload.user_id)
+    if isinstance(payload, PhoneLoginRequest):
+        try:
+            normalized_phone = normalize_phone_number(payload.phone_number)
+        except ValueError as exc:
+            AUTH_LOGIN_TOTAL.labels(outcome="invalid_request").inc()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        user = await db.get_user_auth_by_phone(normalized_phone)
+        password = payload.password
+    else:
+        user = await db.get_user_auth(payload.user_id)
+        password = payload.password
+
     if not user or not user.get("is_active", True):
         AUTH_LOGIN_TOTAL.labels(outcome="invalid_credentials").inc()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-    if not verify_password(payload.password, user.get("password_hash")):
+    if not verify_password(password, user.get("password_hash")):
         AUTH_LOGIN_TOTAL.labels(outcome="invalid_credentials").inc()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 

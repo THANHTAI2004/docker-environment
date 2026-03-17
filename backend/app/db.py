@@ -4,7 +4,8 @@ MongoDB database operations for health monitoring.
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta
+import secrets
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Literal, Optional
 
 import motor.motor_asyncio
@@ -133,6 +134,7 @@ class Database:
 
             # Users
             await self.users.create_index([("user_id", 1)], unique=True)
+            await self.users.create_index([("phone_number", 1)], unique=True, sparse=True)
             await self.users.create_index([("email", 1)], unique=True, sparse=True)
             await self.users.create_index([("role", 1)])
 
@@ -200,6 +202,8 @@ class Database:
         ):
             if isinstance(output.get(field), datetime):
                 output[field] = output[field].isoformat()
+        if isinstance(output.get("date_of_birth"), date):
+            output["date_of_birth"] = output["date_of_birth"].isoformat()
         output.pop("esp_token_hash", None)
         output.pop("password_hash", None)
         return output
@@ -1163,6 +1167,58 @@ class Database:
         except Exception as exc:
             logger.error("User auth query error: %s", exc)
             return None
+
+    async def get_user_auth_by_phone(self, phone_number: str) -> Optional[Dict[str, Any]]:
+        """Get raw user document by normalized phone number including auth fields."""
+        if self.users is None:
+            return None
+        try:
+            doc = await self.users.find_one({"phone_number": phone_number})
+            if not doc:
+                return None
+            doc["_id"] = str(doc.get("_id"))
+            return doc
+        except Exception as exc:
+            logger.error("User auth phone query error: %s", exc)
+            return None
+
+    async def phone_exists(self, phone_number: str) -> bool:
+        """Return True when a normalized phone number is already registered."""
+        if self.users is None:
+            return False
+        try:
+            user = await self.users.find_one({"phone_number": phone_number}, {"_id": 1})
+            return user is not None
+        except Exception as exc:
+            logger.error("Phone exists query error: %s", exc)
+            return False
+
+    async def generate_patient_user_id(self) -> str:
+        """Generate a collision-resistant internal patient user ID."""
+        if self.users is None:
+            return f"patient-{secrets.token_hex(4)}"
+
+        for _ in range(5):
+            candidate = f"patient-{secrets.token_hex(4)}"
+            existing = await self.users.find_one({"user_id": candidate}, {"_id": 1})
+            if existing is None:
+                return candidate
+        return f"patient-{secrets.token_hex(8)}"
+
+    async def create_user_with_phone(self, data: Dict[str, Any]) -> bool:
+        """Create a new patient user with phone-number authentication fields."""
+        if self.users is None:
+            return False
+        try:
+            payload = dict(data)
+            payload.setdefault("created_at", datetime.utcnow())
+            await self.users.insert_one(payload)
+            return True
+        except DuplicateKeyError:
+            return False
+        except Exception as exc:
+            logger.error("Phone user creation error: %s", exc)
+            return False
 
     async def update_user_thresholds(self, user_id: str, thresholds: Dict[str, Any]) -> bool:
         """Update user alert thresholds."""

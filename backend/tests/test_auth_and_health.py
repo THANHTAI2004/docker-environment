@@ -6,6 +6,16 @@ import pytest
 from app.utils.auth import hash_password
 
 
+def _make_phone_lookup(users):
+    async def fake_get_user_auth_by_phone(phone_number):
+        for user in users.values():
+            if user.get("phone_number") == phone_number:
+                return user
+        return None
+
+    return fake_get_user_auth_by_phone
+
+
 @pytest.mark.asyncio
 async def test_ready_returns_503_when_db_down(client, app_module, monkeypatch):
     async def fake_ping():
@@ -32,6 +42,7 @@ async def test_login_returns_refresh_token_and_session_id(client, app_module, mo
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -46,6 +57,7 @@ async def test_login_returns_refresh_token_and_session_id(client, app_module, mo
         return True
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
 
     response = await client.post(
@@ -63,12 +75,186 @@ async def test_login_returns_refresh_token_and_session_id(client, app_module, mo
 
 
 @pytest.mark.asyncio
+async def test_login_with_phone_number_normalizes_and_returns_tokens(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "date_of_birth": "2004-02-01",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["user_id"] == "patient-001"
+    assert body["token_type"] == "bearer"
+
+
+@pytest.mark.asyncio
+async def test_register_creates_patient_with_normalized_phone(client, app_module, monkeypatch):
+    created = {}
+
+    async def fake_phone_exists(phone_number):
+        return phone_number in created
+
+    async def fake_generate_patient_user_id():
+        return "patient-a1b2c3d4"
+
+    async def fake_create_user_with_phone(doc):
+        created[doc["phone_number"]] = dict(doc)
+        return True
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "phone_exists", fake_phone_exists)
+    monkeypatch.setattr(app_module.db, "generate_patient_user_id", fake_generate_patient_user_id)
+    monkeypatch.setattr(app_module.db, "create_user_with_phone", fake_create_user_with_phone)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "name": "Dang Thanh Tai",
+            "phone_number": "0987654321",
+            "date_of_birth": "2004-02-01",
+            "password": "MatKhau123",
+        },
+    )
+
+    body = response.json()
+    saved_user = created["+84987654321"]
+    assert response.status_code == 200
+    assert body == {"status": "success", "user_id": "patient-a1b2c3d4"}
+    assert saved_user["name"] == "Dang Thanh Tai"
+    assert saved_user["phone_number"] == "+84987654321"
+    assert saved_user["date_of_birth"] == "2004-02-01"
+    assert saved_user["role"] == "patient"
+    assert saved_user["is_active"] is True
+    assert saved_user["password_hash"] != "MatKhau123"
+
+
+@pytest.mark.asyncio
+async def test_register_returns_409_when_phone_number_exists(client, app_module, monkeypatch):
+    async def fake_phone_exists(phone_number):
+        return phone_number == "+84987654321"
+
+    monkeypatch.setattr(app_module.db, "phone_exists", fake_phone_exists)
+
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "name": "Dang Thanh Tai",
+            "phone_number": "84987654321",
+            "date_of_birth": "2004-02-01",
+            "password": "MatKhau123",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["message"] == "Phone number already registered"
+
+
+@pytest.mark.asyncio
+async def test_register_rejects_future_date_of_birth(client):
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "name": "Dang Thanh Tai",
+            "phone_number": "0987654321",
+            "date_of_birth": "2099-02-01",
+            "password": "MatKhau123",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["message"] == "Date of birth cannot be in the future"
+
+
+@pytest.mark.asyncio
+async def test_me_returns_extended_profile_fields(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "date_of_birth": "2004-02-01",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_user(user_id):
+        user = users.get(user_id)
+        if not user:
+            return None
+        sanitized = dict(user)
+        sanitized.pop("password_hash", None)
+        return sanitized
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["user_id"] == "patient-001"
+    assert body["phone_number"] == "+84987654321"
+    assert body["date_of_birth"] == "2004-02-01"
+    assert body["role"] == "patient"
+    assert body["is_active"] is True
+
+
+@pytest.mark.asyncio
 async def test_login_with_wrong_password_returns_401(client, app_module, monkeypatch):
     users = {
         "patient-001": {
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -80,6 +266,7 @@ async def test_login_with_wrong_password_returns_401(client, app_module, monkeyp
         return users.get(user_id)
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
 
     response = await client.post(
         "/api/v1/auth/login",
@@ -96,6 +283,7 @@ async def test_refresh_rotates_token_and_invalidates_old_refresh(client, app_mod
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -110,6 +298,7 @@ async def test_refresh_rotates_token_and_invalidates_old_refresh(client, app_mod
         return True
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
 
     login = await client.post(
@@ -144,6 +333,7 @@ async def test_logout_revokes_current_session(client, app_module, monkeypatch):
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -166,6 +356,7 @@ async def test_logout_revokes_current_session(client, app_module, monkeypatch):
         return True
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
     monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
 
@@ -196,6 +387,7 @@ async def test_refresh_token_after_logout_is_rejected(client, app_module, monkey
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -213,6 +405,7 @@ async def test_refresh_token_after_logout_is_rejected(client, app_module, monkey
         return True
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
     monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
 
