@@ -28,6 +28,17 @@ class _AsyncCursor:
         self._docs = list(docs)
         self._index = 0
 
+    def sort(self, key_or_list, direction=None):
+        if isinstance(key_or_list, list):
+            sort_fields = list(reversed(key_or_list))
+        else:
+            sort_fields = [(key_or_list, direction if direction is not None else 1)]
+
+        for field, sort_direction in sort_fields:
+            reverse = sort_direction == -1
+            self._docs.sort(key=lambda doc: (doc.get(field) is None, doc.get(field)), reverse=reverse)
+        return self
+
     def __aiter__(self):
         self._index = 0
         return self
@@ -140,7 +151,11 @@ async def test_request_ecg_returns_already_queued_for_duplicate(client, app_modu
     )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "already_queued"
+    body = response.json()
+    assert body["status"] == "already_queued"
+    assert body["delivery"] == "rest_polling"
+    assert body["command_id"] == "cmd-001"
+    assert body["request_id"] == "req-001"
 
 
 @pytest.mark.asyncio
@@ -189,6 +204,64 @@ async def test_request_ecg_returns_409_when_pending_limit_reached(client, app_mo
     )
 
     assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_request_ecg_returns_queued_contract(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_type": "chest", "device_name": "Chest 1"}
+
+    async def fake_get_device_link(device_id, user_id):
+        return {"device_id": device_id, "user_id": user_id, "link_role": "owner"}
+
+    async def fake_enqueue_device_command(doc):
+        return {"status": "queued", "command_id": "cmd-002"}
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+    monkeypatch.setattr(app_module.db, "enqueue_device_command", fake_enqueue_device_command)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.post(
+        "/api/v1/devices/dev-001/ecg/request",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"duration_seconds": 10, "sampling_rate": 250},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["status"] == "queued"
+    assert body["delivery"] == "rest_polling"
+    assert body["command_id"] == "cmd-002"
+    assert isinstance(body["request_id"], str)
+    assert isinstance(body["expires_at"], str)
 
 
 @pytest.mark.asyncio
@@ -267,3 +340,80 @@ async def test_recover_stale_device_commands_fails_after_retry_limit(monkeypatch
     assert summary["completed"] == 1
     assert db.device_commands.docs[0]["status"] == COMMAND_STATUS_FAILED
     assert db.device_commands.docs[1]["status"] == COMMAND_STATUS_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_list_devices_for_user_includes_linked_users():
+    db = Database()
+    db.device_links = _FakeCollection(
+        [
+            {
+                "_id": "link-1",
+                "device_id": "dev-001",
+                "user_id": "patient-001",
+                "link_role": "owner",
+                "linked_at": "2026-03-17T10:01:00Z",
+                "linked_by": "admin-001",
+            },
+            {
+                "_id": "link-2",
+                "device_id": "dev-001",
+                "user_id": "caregiver-001",
+                "link_role": "viewer",
+                "linked_at": "2026-03-17T10:02:00Z",
+                "linked_by": "admin-001",
+            },
+        ]
+    )
+    db.devices = _FakeCollection(
+        [
+            {
+                "_id": "device-1",
+                "device_id": "dev-001",
+                "device_type": "wrist",
+                "device_name": "Wristband 1",
+                "firmware_version": "1.0.0",
+                "status": "active",
+            }
+        ]
+    )
+    db.users = _FakeCollection(
+        [
+            {
+                "_id": "user-1",
+                "user_id": "patient-001",
+                "name": "Patient One",
+                "role": "patient",
+                "phone_number": "+84987654321",
+            },
+            {
+                "_id": "user-2",
+                "user_id": "caregiver-001",
+                "name": "Caregiver One",
+                "role": "caregiver",
+                "phone_number": "+84987654323",
+            },
+        ]
+    )
+
+    items = await db.list_devices_for_user("patient-001")
+
+    assert len(items) == 1
+    assert items[0]["device_id"] == "dev-001"
+    assert items[0]["link_role"] == "owner"
+    assert items[0]["linked_users"] == [
+        {
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "role": "patient",
+            "phone_number": "+84987654321",
+            "link_role": "owner",
+        },
+        {
+            "user_id": "caregiver-001",
+            "name": "Caregiver One",
+            "role": "caregiver",
+            "phone_number": "+84987654323",
+            "link_role": "viewer",
+        },
+    ]

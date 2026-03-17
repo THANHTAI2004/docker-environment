@@ -249,6 +249,7 @@ class AlertService:
 
         inserted_alerts: list[Dict[str, Any]] = []
         for alert in alerts:
+            alert["recipient_user_ids"] = await db.get_alert_recipient_user_ids(alert["device_id"])
             alert_id = await db.insert_alert(alert)
             if alert_id:
                 logger.info("Alert generated: %s - %s", alert["alert_type"], alert["message"])

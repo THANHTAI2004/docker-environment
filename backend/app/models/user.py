@@ -44,19 +44,19 @@ class AlertThresholds(BaseModel):
 
 
 class User(BaseModel):
-    """System user (patient or caregiver)."""
+    """System user (manager, caregiver, or internal admin)."""
     user_id: str
     name: str
     age: Optional[int] = None
     gender: Optional[str] = None
-    role: Literal["admin", "caregiver", "patient"] = Field(..., description="admin, caregiver, or patient")
+    role: Literal["admin", "caregiver", "manager"] = Field(..., description="admin, caregiver, or manager")
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     phone_number: Optional[str] = None
     date_of_birth: Optional[date] = None
     is_active: bool = True
     
-    # Health profile (for patients)
+    # Health profile (optional)
     health_profile: Optional[HealthProfile] = None
     
     # Custom thresholds
@@ -65,7 +65,7 @@ class User(BaseModel):
     # Associated devices
     devices: List[str] = Field(default_factory=list)
     
-    # Caregivers (for patients)
+    # Legacy caregiver mapping retained for backward compatibility with older records.
     caregivers: List[str] = Field(default_factory=list, description="Caregiver user IDs")
     
     created_at: Optional[datetime] = None
@@ -82,7 +82,7 @@ class UserCreate(BaseModel):
     """User creation request."""
     user_id: str
     name: str
-    role: Literal["admin", "caregiver", "patient"]
+    role: Literal["admin", "caregiver", "manager"]
     password: str = Field(..., min_length=8)
     email: Optional[EmailStr] = None
     phone: Optional[str] = None

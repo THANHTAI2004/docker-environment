@@ -67,6 +67,9 @@ async def test_login_returns_refresh_token_and_session_id(client, app_module, mo
 
     body = response.json()
     assert response.status_code == 200
+    assert isinstance(body["access_token"], str)
+    assert isinstance(body["refresh_token"], str)
+    assert isinstance(body["session_id"], str)
     assert body["token_type"] == "bearer"
     assert body["access_token"]
     assert body["refresh_token"]
@@ -107,6 +110,18 @@ async def test_login_with_phone_number_normalizes_and_returns_tokens(client, app
 
     body = response.json()
     assert response.status_code == 200
+    assert set(body.keys()) == {
+        "access_token",
+        "refresh_token",
+        "token_type",
+        "expires_at",
+        "refresh_expires_at",
+        "session_id",
+        "user_id",
+        "role",
+        "scopes",
+    }
+    assert isinstance(body["scopes"], list)
     assert body["user_id"] == "patient-001"
     assert body["token_type"] == "bearer"
 
@@ -147,6 +162,8 @@ async def test_register_creates_patient_with_normalized_phone(client, app_module
     saved_user = created["+84987654321"]
     assert response.status_code == 200
     assert body == {"status": "success", "user_id": "patient-a1b2c3d4"}
+    assert isinstance(body["status"], str)
+    assert isinstance(body["user_id"], str)
     assert saved_user["name"] == "Dang Thanh Tai"
     assert saved_user["phone_number"] == "+84987654321"
     assert saved_user["date_of_birth"] == "2004-02-01"
@@ -240,6 +257,11 @@ async def test_me_returns_extended_profile_fields(client, app_module, monkeypatc
 
     body = response.json()
     assert response.status_code == 200
+    assert {"user_id", "name", "phone_number", "date_of_birth", "role", "is_active"} <= set(body.keys())
+    assert isinstance(body["user_id"], str)
+    assert isinstance(body["name"], str)
+    assert isinstance(body["phone_number"], str)
+    assert isinstance(body["is_active"], bool)
     assert body["user_id"] == "patient-001"
     assert body["phone_number"] == "+84987654321"
     assert body["date_of_birth"] == "2004-02-01"
@@ -590,11 +612,15 @@ async def test_device_ecg_endpoint_returns_items(client, app_module, monkeypatch
         headers={"Authorization": f"Bearer {token}"},
     )
 
+    body = response.json()
     assert login.status_code == 200
     assert response.status_code == 200
-    assert response.json()["device_id"] == "dev-001"
-    assert response.json()["count"] == 1
-    assert response.json()["items"][0]["ecg"]["quality"] == "good"
+    assert body["device_id"] == "dev-001"
+    assert body["count"] == 1
+    assert isinstance(body["items"], list)
+    assert body["items"][0]["device_id"] == "dev-001"
+    assert body["items"][0]["ecg"]["quality"] == "good"
+    assert "deviceId" not in body
 
 
 @pytest.mark.asyncio
@@ -688,7 +714,22 @@ async def test_me_devices_returns_linked_devices(client, app_module, monkeypatch
                 "device_id": "dev-001",
                 "device_name": "Wristband 1",
                 "device_type": "wrist",
+                "firmware_version": "1.0.0",
+                "registered_at": "2026-03-17T10:00:00Z",
+                "last_seen": "2026-03-17T10:05:00Z",
+                "status": "active",
                 "link_role": "owner",
+                "linked_at": "2026-03-17T10:01:00Z",
+                "linked_by": "admin-001",
+                "linked_users": [
+                    {
+                        "user_id": "patient-001",
+                        "name": "Patient One",
+                        "role": "patient",
+                        "phone_number": "+84987654321",
+                        "link_role": "owner",
+                    }
+                ],
             }
         ]
 
@@ -707,10 +748,20 @@ async def test_me_devices_returns_linked_devices(client, app_module, monkeypatch
         headers={"Authorization": f"Bearer {token}"},
     )
 
+    body = response.json()
     assert login.status_code == 200
     assert response.status_code == 200
-    assert response.json()["count"] == 1
-    assert response.json()["items"][0]["device_id"] == "dev-001"
+    assert body["user_id"] == "patient-001"
+    assert body["count"] == 1
+    assert isinstance(body["items"], list)
+    assert body["items"][0]["device_id"] == "dev-001"
+    assert body["items"][0]["device_type"] == "wrist"
+    assert body["items"][0]["device_name"] == "Wristband 1"
+    assert body["items"][0]["link_role"] == "owner"
+    assert isinstance(body["items"][0]["linked_users"], list)
+    assert body["items"][0]["linked_users"][0]["user_id"] == "patient-001"
+    assert body["items"][0]["linked_users"][0]["phone_number"] == "+84987654321"
+    assert "deviceId" not in body["items"][0]
 
 
 @pytest.mark.asyncio

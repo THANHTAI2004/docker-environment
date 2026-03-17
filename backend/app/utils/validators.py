@@ -107,8 +107,8 @@ def validate_device_type(device_type: str) -> bool:
 
 
 def validate_user_role(role: str) -> bool:
-    """Validate user role is either 'patient' or 'caregiver'."""
-    return role in ["patient", "caregiver"]
+    """Validate user role is either 'manager' or 'caregiver'."""
+    return role in ["manager", "caregiver"]
 
 
 def validate_alert_severity(severity: str) -> bool:

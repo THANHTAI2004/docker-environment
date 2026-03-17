@@ -11,7 +11,7 @@ class DeviceLink(BaseModel):
     """One relationship between a user account and a device."""
     device_id: str
     user_id: str
-    link_role: Literal["owner", "viewer"] = Field(default="viewer")
+    link_role: Literal["owner", "caregiver"] = Field(default="caregiver")
     linked_at: Optional[datetime] = None
     linked_by: Optional[str] = None
     updated_at: Optional[datetime] = None
@@ -27,4 +27,9 @@ class DeviceLinkDB(DeviceLink):
 class DeviceLinkRequest(BaseModel):
     """Request payload to link a user to a device."""
     user_id: Optional[str] = None
-    link_role: Literal["owner", "viewer"] = Field(default="viewer")
+    link_role: Literal["owner", "caregiver"] = Field(default="caregiver")
+
+
+class DeviceCaregiverRequest(BaseModel):
+    """Request payload to add one caregiver to a device."""
+    user_id: str

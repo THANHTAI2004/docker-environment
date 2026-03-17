@@ -10,8 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import uuid
 
 from ..db import db
-from ..models import DeviceRegistration, ECGRequestCommand, ThresholdsUpdate, DeviceLinkRequest
-from ..utils.access import ensure_device_access, filter_device_response
+from ..models import DeviceCaregiverRequest, DeviceRegistration, ECGRequestCommand, ThresholdsUpdate, DeviceLinkRequest
+from ..utils.access import (
+    ensure_device_manage_access,
+    ensure_device_owner,
+    ensure_device_view_access,
+    filter_device_response,
+)
 from ..utils.auth import hash_device_token, require_current_user, require_admin_user
 from ..config import settings
 
@@ -49,28 +54,24 @@ async def link_device_to_user(
     request: Request,
     current_user: dict = Depends(require_current_user),
 ):
-    """Link the current user, or a specified user, to one device."""
-    device = await db.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+    """Backward-compatible alias for linking one caregiver to a device."""
+    await ensure_device_manage_access(current_user, device_id)
+    if payload.link_role != "caregiver":
+        raise HTTPException(status_code=400, detail="Use /claim for owner assignment")
 
-    target_user_id = payload.user_id or current_user["user_id"]
-    if target_user_id != current_user["user_id"] and current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only admin can link another user")
-
+    target_user_id = payload.user_id
+    if not target_user_id:
+        raise HTTPException(status_code=422, detail="user_id is required")
     target_user = await db.get_user(target_user_id)
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
-
-    if payload.link_role == "owner":
-        owner_link = await db.get_device_owner_link(device_id)
-        if owner_link and owner_link.get("user_id") != target_user_id:
-            raise HTTPException(status_code=409, detail="This device already has an owner")
+    if target_user.get("role") != "caregiver":
+        raise HTTPException(status_code=400, detail="Target user must have caregiver role")
 
     result = await db.upsert_device_link(
         device_id=device_id,
         user_id=target_user_id,
-        link_role=payload.link_role,
+        link_role="caregiver",
         linked_by=current_user["user_id"],
     )
     if result == "error":
@@ -85,8 +86,9 @@ async def link_device_to_user(
             "request_id": request.state.request_id,
             "details": {
                 "user_id": target_user_id,
-                "link_role": payload.link_role,
+                "link_role": "caregiver",
                 "result": result,
+                "legacy_path": True,
             },
         }
     )
@@ -94,7 +96,93 @@ async def link_device_to_user(
         "status": result,
         "device_id": device_id,
         "user_id": target_user_id,
-        "link_role": payload.link_role,
+        "link_role": "caregiver",
+    }
+
+
+@router.post("/devices/{device_id}/claim")
+async def claim_device(
+    device_id: str,
+    request: Request,
+    current_user: dict = Depends(require_current_user),
+):
+    """Claim a device as its owner when the caller is a manager."""
+    device = await db.get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if current_user.get("role") != "manager":
+        raise HTTPException(status_code=403, detail="Manager role required")
+
+    owner_link = await db.get_device_owner_link(device_id)
+    if owner_link and owner_link.get("user_id") != current_user["user_id"]:
+        raise HTTPException(status_code=409, detail="This device already has an owner")
+
+    result = await db.upsert_device_link(
+        device_id=device_id,
+        user_id=current_user["user_id"],
+        link_role="owner",
+        linked_by=current_user["user_id"],
+    )
+    if result == "error":
+        raise HTTPException(status_code=500, detail="Failed to claim device")
+
+    await db.insert_audit_log(
+        {
+            "action": "device.claim",
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user["role"],
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+        }
+    )
+    return {
+        "status": "claimed",
+        "device_id": device_id,
+        "user_id": current_user["user_id"],
+        "link_role": "owner",
+    }
+
+
+@router.post("/devices/{device_id}/caregivers")
+async def add_device_caregiver(
+    device_id: str,
+    payload: DeviceCaregiverRequest,
+    request: Request,
+    current_user: dict = Depends(require_current_user),
+):
+    """Add one caregiver to a device."""
+    await ensure_device_owner(current_user, device_id)
+
+    target_user = await db.get_user(payload.user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target_user.get("role") != "caregiver":
+        raise HTTPException(status_code=400, detail="Target user must have caregiver role")
+
+    result = await db.upsert_device_link(
+        device_id=device_id,
+        user_id=payload.user_id,
+        link_role="caregiver",
+        linked_by=current_user["user_id"],
+    )
+    if result == "error":
+        raise HTTPException(status_code=500, detail="Failed to link caregiver")
+
+    await db.insert_audit_log(
+        {
+            "action": "device.caregiver.link",
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user["role"],
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+            "details": {"user_id": payload.user_id},
+        }
+    )
+    return {
+        "status": result,
+        "device_id": device_id,
+        "user_id": payload.user_id,
+        "link_role": "caregiver",
     }
 
 
@@ -104,7 +192,7 @@ async def get_device_linked_users(
     current_user: dict = Depends(require_current_user),
 ):
     """List the users linked to one device."""
-    await ensure_device_access(current_user, device_id)
+    await ensure_device_view_access(current_user, device_id)
     items = await db.list_users_for_device(device_id)
     return {"device_id": device_id, "count": len(items), "items": items}
 
@@ -116,16 +204,13 @@ async def unlink_device_from_user(
     request: Request,
     current_user: dict = Depends(require_current_user),
 ):
-    """Remove one user-device link."""
-    if current_user.get("role") != "admin" and current_user.get("user_id") != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    if current_user.get("role") != "admin":
-        await ensure_device_access(current_user, device_id)
-    else:
-        device = await db.get_device(device_id)
-        if not device:
-            raise HTTPException(status_code=404, detail="Device not found")
+    """Backward-compatible alias for removing a caregiver link."""
+    await ensure_device_manage_access(current_user, device_id)
+    link = await db.get_device_link(device_id, user_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    if link.get("link_role") == "owner":
+        raise HTTPException(status_code=400, detail="Use ownership flows for owner links")
 
     success = await db.delete_device_link(device_id, user_id)
     if not success:
@@ -134,6 +219,40 @@ async def unlink_device_from_user(
     await db.insert_audit_log(
         {
             "action": "device.unlink",
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user["role"],
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+            "details": {"user_id": user_id, "legacy_path": True},
+        }
+    )
+    return {"status": "success", "device_id": device_id, "user_id": user_id}
+
+
+@router.delete("/devices/{device_id}/caregivers/{user_id}")
+async def remove_device_caregiver(
+    device_id: str,
+    user_id: str,
+    request: Request,
+    current_user: dict = Depends(require_current_user),
+):
+    """Remove one caregiver from a device."""
+    await ensure_device_owner(current_user, device_id)
+    link = await db.get_device_link(device_id, user_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    if link.get("link_role") == "owner":
+        raise HTTPException(status_code=400, detail="Owner cannot be removed from this endpoint")
+    if link.get("link_role") != "caregiver":
+        raise HTTPException(status_code=400, detail="Target user is not a caregiver on this device")
+
+    success = await db.delete_device_link(device_id, user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Link not found")
+
+    await db.insert_audit_log(
+        {
+            "action": "device.caregiver.unlink",
             "actor_id": current_user["user_id"],
             "actor_role": current_user["role"],
             "target_id": device_id,
@@ -147,7 +266,7 @@ async def unlink_device_from_user(
 @router.get("/devices/{device_id}")
 async def get_device(device_id: str, current_user: dict = Depends(require_current_user)):
     """Get device details."""
-    device = await ensure_device_access(current_user, device_id)
+    device = await ensure_device_view_access(current_user, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
     return filter_device_response(device, current_user)
@@ -161,7 +280,7 @@ async def request_ecg(
     current_user: dict = Depends(require_current_user),
 ):
     """Queue ECG command; ESP will receive it via REST polling."""
-    await ensure_device_access(current_user, device_id)
+    await ensure_device_manage_access(current_user, device_id)
 
     request_id = str(uuid.uuid4())
     expires_at = datetime.utcnow() + timedelta(seconds=settings.command_ttl_seconds)
@@ -220,9 +339,10 @@ async def update_device_thresholds(
     device_id: str,
     thresholds: ThresholdsUpdate,
     request: Request,
-    principal: dict = Depends(require_admin_user),
+    current_user: dict = Depends(require_current_user),
 ):
     """Update alert thresholds stored directly on one device."""
+    await ensure_device_manage_access(current_user, device_id)
     threshold_dict = {k: v for k, v in thresholds.model_dump().items() if v is not None}
     if not threshold_dict:
         raise HTTPException(status_code=400, detail="No thresholds provided")
@@ -234,8 +354,8 @@ async def update_device_thresholds(
     await db.insert_audit_log(
         {
             "action": "device.thresholds.update",
-            "actor_id": principal["user_id"],
-            "actor_role": principal["role"],
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user["role"],
             "target_id": device_id,
             "request_id": request.state.request_id,
             "details": {"updated_fields": sorted(threshold_dict.keys())},
@@ -248,12 +368,10 @@ async def update_device_thresholds(
 async def rotate_esp_token(
     device_id: str,
     request: Request,
-    principal: dict = Depends(require_admin_user),
+    current_user: dict = Depends(require_current_user),
 ):
     """Generate and set new ESP token for a device (shown only once)."""
-    device = await db.get_device(device_id)
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+    await ensure_device_manage_access(current_user, device_id)
 
     token = secrets.token_urlsafe(32)
     token_hash = hash_device_token(token)
@@ -266,8 +384,8 @@ async def rotate_esp_token(
     await db.insert_audit_log(
         {
             "action": "device.esp_token.rotate",
-            "actor_id": principal["user_id"],
-            "actor_role": principal["role"],
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user["role"],
             "target_id": device_id,
             "request_id": request.state.request_id,
         }
@@ -282,7 +400,7 @@ async def _get_device_history(
     limit: int,
     current_user: dict,
 ):
-    await ensure_device_access(current_user, device_id)
+    await ensure_device_view_access(current_user, device_id)
     items = await db.get_readings_by_device(
         device_id=device_id,
         start_time=start_time,
@@ -390,7 +508,7 @@ async def get_device_vitals(
 @router.get("/devices/{device_id}/latest")
 async def get_device_latest(device_id: str, current_user: dict = Depends(require_current_user)):
     """Get most recent reading from one device."""
-    await ensure_device_access(current_user, device_id)
+    await ensure_device_view_access(current_user, device_id)
     latest = await db.get_latest_reading(device_id)
     if not latest:
         raise HTTPException(status_code=404, detail="No data found for this device")
@@ -405,7 +523,7 @@ async def get_device_ecg(
     current_user: dict = Depends(require_current_user),
 ):
     """Get ECG waveform history for one device."""
-    await ensure_device_access(current_user, device_id)
+    await ensure_device_view_access(current_user, device_id)
     items = await db.get_device_ecg_readings(
         device_id=device_id,
         quality_filter=quality_filter,
@@ -428,11 +546,13 @@ async def get_device_summary(
     return await _build_device_summary(device_id, period, current_user)
 
 
+# Deprecated aliases kept temporarily for older clients.
+# New mobile app must use /api/v1/devices/{device_id}/...
 @router.get("/public/devices/{device_id}", deprecated=True)
 async def get_public_device(device_id: str, current_user: dict = Depends(require_current_user)):
     """Authenticated device profile alias kept for backward compatibility."""
     logger.warning("Deprecated public device endpoint used for device=%s", device_id)
-    device = await ensure_device_access(current_user, device_id)
+    device = await ensure_device_view_access(current_user, device_id)
     return {
         "device_id": device.get("device_id"),
         "device_type": device.get("device_type"),
@@ -454,7 +574,7 @@ async def get_public_device_history(
 ):
     """Authenticated history alias kept for backward compatibility."""
     logger.warning("Deprecated public device history endpoint used for device=%s", device_id)
-    await ensure_device_access(current_user, device_id)
+    await ensure_device_view_access(current_user, device_id)
     items = await db.get_readings_by_device(
         device_id=device_id,
         start_time=start_time,
@@ -471,7 +591,7 @@ async def get_public_device_latest(
 ):
     """Authenticated latest-reading alias kept for backward compatibility."""
     logger.warning("Deprecated public device latest endpoint used for device=%s", device_id)
-    await ensure_device_access(current_user, device_id)
+    await ensure_device_view_access(current_user, device_id)
     latest = await db.get_latest_reading(device_id)
     if not latest:
         raise HTTPException(status_code=404, detail="No data found for this device")
@@ -487,7 +607,7 @@ async def get_public_device_ecg(
 ):
     """Authenticated ECG history alias kept for backward compatibility."""
     logger.warning("Deprecated public device ECG endpoint used for device=%s", device_id)
-    await ensure_device_access(current_user, device_id)
+    await ensure_device_view_access(current_user, device_id)
     items = await db.get_device_ecg_readings(
         device_id=device_id,
         quality_filter=quality_filter,
@@ -506,7 +626,7 @@ async def get_public_device_alerts(
 ):
     """Authenticated alert history alias kept for backward compatibility."""
     logger.warning("Deprecated public device alerts endpoint used for device=%s", device_id)
-    await ensure_device_access(current_user, device_id)
+    await ensure_device_view_access(current_user, device_id)
     items = await db.get_alerts_by_device(
         device_id=device_id,
         severity=severity,
@@ -532,17 +652,18 @@ async def cancel_device_command(
     device_id: str,
     command_id: str,
     request: Request,
-    principal: dict = Depends(require_admin_user),
+    current_user: dict = Depends(require_current_user),
 ):
     """Cancel a queued or in-flight command."""
-    success = await db.cancel_device_command(device_id, command_id, "Cancelled by admin")
+    await ensure_device_manage_access(current_user, device_id)
+    success = await db.cancel_device_command(device_id, command_id, "Cancelled by device owner")
     if not success:
         raise HTTPException(status_code=404, detail="Command not found or already finished")
     await db.insert_audit_log(
         {
             "action": "device.command.cancel",
-            "actor_id": principal["user_id"],
-            "actor_role": principal["role"],
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user["role"],
             "target_id": command_id,
             "request_id": request.state.request_id,
             "details": {"device_id": device_id},

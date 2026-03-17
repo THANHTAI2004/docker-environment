@@ -52,7 +52,7 @@ async def register(payload: RegisterRequest, request: Request):
             "phone_number": normalized_phone,
             "date_of_birth": payload.date_of_birth.isoformat(),
             "password_hash": hash_password(payload.password),
-            "role": "patient",
+            "role": "manager",
             "is_active": True,
         }
     )
@@ -65,7 +65,7 @@ async def register(payload: RegisterRequest, request: Request):
         {
             "action": "auth.register",
             "actor_id": user_id,
-            "actor_role": "patient",
+            "actor_role": "manager",
             "target_id": user_id,
             "request_id": request.state.request_id,
         }

@@ -20,14 +20,17 @@ async def ensure_user_access(principal: Dict[str, Any], target_user_id: str) -> 
         return user
     if actor_user_id == target_user_id:
         return user
+    if user.get("role") == "manager" and actor_user_id:
+        if await db.users_share_device_access(actor_user_id, target_user_id):
+            return user
     if role == "caregiver" and actor_user_id in user.get("caregivers", []):
         return user
 
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
 
-async def ensure_device_access(principal: Dict[str, Any], device_id: str) -> Dict[str, Any]:
-    """Ensure the actor can access one device and return its record."""
+async def ensure_device_view_access(principal: Dict[str, Any], device_id: str) -> Dict[str, Any]:
+    """Ensure the actor can view one device and return its record."""
     device = await db.get_device(device_id)
     if not device:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
@@ -40,9 +43,38 @@ async def ensure_device_access(principal: Dict[str, Any], device_id: str) -> Dic
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
 
     link = await db.get_device_link(device_id, actor_user_id)
-    if not link:
+    if not link or link.get("link_role") not in {"owner", "caregiver"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     return device
+
+
+async def ensure_device_owner(principal: Dict[str, Any], device_id: str) -> Dict[str, Any]:
+    """Ensure the actor is the owner of one device and return its record."""
+    device = await db.get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+
+    if principal.get("role") == "admin":
+        return device
+
+    actor_user_id = principal.get("user_id")
+    if not actor_user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    link = await db.get_device_link_by_role(device_id, actor_user_id, "owner")
+    if not link:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner role required")
+    return device
+
+
+async def ensure_device_manage_access(principal: Dict[str, Any], device_id: str) -> Dict[str, Any]:
+    """Ensure the actor can manage one device and return its record."""
+    return await ensure_device_owner(principal, device_id)
+
+
+async def ensure_device_access(principal: Dict[str, Any], device_id: str) -> Dict[str, Any]:
+    """Backward-compatible alias for device view access."""
+    return await ensure_device_view_access(principal, device_id)
 
 
 async def ensure_alert_access(principal: Dict[str, Any], alert_id: str) -> Dict[str, Any]:
@@ -51,7 +83,7 @@ async def ensure_alert_access(principal: Dict[str, Any], alert_id: str) -> Dict[
     if not alert:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
     if principal.get("role") != "admin":
-        await ensure_device_access(principal, alert["device_id"])
+        await ensure_device_view_access(principal, alert["device_id"])
     return alert
 
 

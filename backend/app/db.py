@@ -280,9 +280,21 @@ class Database:
             return []
 
         try:
-            query: Dict[str, Any] = {"user_id": user_id}
+            owned_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner"])
             if device_id:
-                query["$or"] = [{"device_id": device_id}, {"device_uid": device_id}]
+                if device_id not in owned_device_ids:
+                    return []
+                target_device_ids = [device_id]
+            else:
+                target_device_ids = owned_device_ids
+            if not target_device_ids:
+                return []
+            query: Dict[str, Any] = {
+                "$or": [
+                    {"device_id": {"$in": target_device_ids}},
+                    {"device_uid": {"$in": target_device_ids}},
+                ]
+            }
             if start_time or end_time:
                 query["timestamp"] = {}
                 if start_time is not None:
@@ -366,9 +378,21 @@ class Database:
         if self.health_readings is None:
             return None
         try:
-            query: Dict[str, Any] = {"user_id": user_id}
+            owned_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner"])
             if device_id:
-                query["$or"] = [{"device_id": device_id}, {"device_uid": device_id}]
+                if device_id not in owned_device_ids:
+                    return None
+                target_device_ids = [device_id]
+            else:
+                target_device_ids = owned_device_ids
+            if not target_device_ids:
+                return None
+            query: Dict[str, Any] = {
+                "$or": [
+                    {"device_id": {"$in": target_device_ids}},
+                    {"device_uid": {"$in": target_device_ids}},
+                ]
+            }
             doc = await self.health_readings.find_one(query, sort=[("timestamp", -1)])
             return self._serialize_doc(doc) if doc else None
         except Exception as exc:
@@ -385,7 +409,16 @@ class Database:
         if self.health_readings is None:
             return []
         try:
-            query: Dict[str, Any] = {"user_id": user_id, "ecg": {"$exists": True, "$ne": None}}
+            owned_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner"])
+            if not owned_device_ids:
+                return []
+            query: Dict[str, Any] = {
+                "$or": [
+                    {"device_id": {"$in": owned_device_ids}},
+                    {"device_uid": {"$in": owned_device_ids}},
+                ],
+                "ecg": {"$exists": True, "$ne": None},
+            }
             if quality_filter:
                 query["ecg.quality"] = quality_filter
             cursor = self.health_readings.find(query).sort("timestamp", -1).limit(limit)
@@ -462,7 +495,13 @@ class Database:
         if self.alerts is None:
             return []
         try:
-            query: Dict[str, Any] = {"user_id": user_id}
+            owned_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner"])
+            query: Dict[str, Any] = {
+                "$or": [
+                    {"recipient_user_ids": user_id},
+                    {"device_id": {"$in": owned_device_ids}},
+                ]
+            }
             if severity:
                 query["severity"] = severity
             if acknowledged is not None:
@@ -671,6 +710,81 @@ class Database:
             logger.error("Device owner link query error: %s", exc)
             return None
 
+    async def list_device_links(self, device_id: str) -> List[Dict[str, Any]]:
+        """Return all links for one device."""
+        if self.device_links is None:
+            return []
+        try:
+            links = [self._serialize_doc(doc) async for doc in self.device_links.find({"device_id": device_id})]
+            links.sort(key=lambda item: (0 if item.get("link_role") == "owner" else 1, item.get("linked_at") or ""))
+            return links
+        except Exception as exc:
+            logger.error("Device links query error: %s", exc)
+            return []
+
+    async def get_device_link_by_role(
+        self,
+        device_id: str,
+        user_id: str,
+        link_role: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Return one user-device link with the expected link role."""
+        if self.device_links is None:
+            return None
+        try:
+            doc = await self.device_links.find_one(
+                {"device_id": device_id, "user_id": user_id, "link_role": link_role}
+            )
+            return self._serialize_doc(doc) if doc else None
+        except Exception as exc:
+            logger.error("Device link role query error: %s", exc)
+            return None
+
+    async def list_device_links_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+        """Return all device links for one user."""
+        if self.device_links is None:
+            return []
+        try:
+            return [self._serialize_doc(doc) async for doc in self.device_links.find({"user_id": user_id})]
+        except Exception as exc:
+            logger.error("User device links query error: %s", exc)
+            return []
+
+    async def get_device_ids_for_user(
+        self,
+        user_id: str,
+        link_roles: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Return linked device IDs for one user, optionally filtered by link role."""
+        if self.device_links is None:
+            return []
+        try:
+            query: Dict[str, Any] = {"user_id": user_id}
+            if link_roles:
+                query["link_role"] = {"$in": list(link_roles)}
+            links = [doc async for doc in self.device_links.find(query, {"device_id": 1, "_id": 0})]
+            return [doc["device_id"] for doc in links if doc.get("device_id")]
+        except Exception as exc:
+            logger.error("Device IDs for user query error: %s", exc)
+            return []
+
+    async def users_share_device_access(self, actor_user_id: str, target_user_id: str) -> bool:
+        """Return True when two users are linked to at least one common device."""
+        actor_device_ids = set(await self.get_device_ids_for_user(actor_user_id))
+        if not actor_device_ids:
+            return False
+        target_device_ids = set(await self.get_device_ids_for_user(target_user_id))
+        return bool(actor_device_ids.intersection(target_device_ids))
+
+    async def get_alert_recipient_user_ids(self, device_id: str) -> List[str]:
+        """Return owner + caregiver user IDs for one device."""
+        links = await self.list_device_links(device_id)
+        return [
+            link["user_id"]
+            for link in links
+            if link.get("link_role") in {"owner", "caregiver"} and link.get("user_id")
+        ]
+
     async def upsert_device_link(
         self,
         device_id: str,
@@ -727,7 +841,7 @@ class Database:
 
     async def list_devices_for_user(self, user_id: str) -> List[Dict[str, Any]]:
         """List devices linked to one user with link metadata."""
-        if self.device_links is None or self.devices is None:
+        if self.device_links is None or self.devices is None or self.users is None:
             return []
         try:
             links = [
@@ -742,6 +856,33 @@ class Database:
                 doc["device_id"]: self._serialize_doc(doc)
                 async for doc in self.devices.find({"device_id": {"$in": device_ids}})
             }
+            device_links = [
+                self._serialize_doc(doc)
+                async for doc in self.device_links.find({"device_id": {"$in": device_ids}}).sort(
+                    [("link_role", 1), ("linked_at", 1)]
+                )
+            ]
+            linked_user_ids = list({link["user_id"] for link in device_links})
+            users = {
+                doc["user_id"]: self._serialize_doc(doc)
+                async for doc in self.users.find({"user_id": {"$in": linked_user_ids}})
+            }
+            linked_users_by_device: Dict[str, List[Dict[str, Any]]] = {}
+            for device_link in device_links:
+                linked_user = users.get(device_link["user_id"])
+                if not linked_user:
+                    continue
+                linked_users_by_device.setdefault(device_link["device_id"], []).append(
+                    {
+                        "user_id": linked_user.get("user_id"),
+                        "name": linked_user.get("name"),
+                        "role": linked_user.get("role"),
+                        "phone_number": linked_user.get("phone_number") or linked_user.get("phone"),
+                        "link_role": device_link.get("link_role"),
+                    }
+                )
+            for linked_items in linked_users_by_device.values():
+                linked_items.sort(key=lambda item: (0 if item.get("link_role") == "owner" else 1, item.get("user_id") or ""))
 
             results: List[Dict[str, Any]] = []
             for link in links:
@@ -760,6 +901,7 @@ class Database:
                         "link_role": link.get("link_role"),
                         "linked_at": link.get("linked_at"),
                         "linked_by": link.get("linked_by"),
+                        "linked_users": linked_users_by_device.get(link["device_id"], []),
                     }
                 )
             return results
@@ -799,13 +941,13 @@ class Database:
                         "role": user.get("role"),
                         "email": user.get("email"),
                         "phone_number": user.get("phone_number") or user.get("phone"),
-                        "phone": user.get("phone_number") or user.get("phone"),
                         "is_active": user.get("is_active"),
                         "link_role": link.get("link_role"),
                         "linked_at": link.get("linked_at"),
                         "linked_by": link.get("linked_by"),
                     }
                 )
+            results.sort(key=lambda item: (0 if item.get("link_role") == "owner" else 1, item.get("linked_at") or ""))
             return results
         except Exception as exc:
             logger.error("List users for device error: %s", exc)
@@ -1195,16 +1337,16 @@ class Database:
             return False
 
     async def generate_patient_user_id(self) -> str:
-        """Generate a collision-resistant internal patient user ID."""
+        """Generate a collision-resistant internal manager user ID."""
         if self.users is None:
-            return f"patient-{secrets.token_hex(4)}"
+            return f"manager-{secrets.token_hex(4)}"
 
         for _ in range(5):
-            candidate = f"patient-{secrets.token_hex(4)}"
+            candidate = f"manager-{secrets.token_hex(4)}"
             existing = await self.users.find_one({"user_id": candidate}, {"_id": 1})
             if existing is None:
                 return candidate
-        return f"patient-{secrets.token_hex(8)}"
+        return f"manager-{secrets.token_hex(8)}"
 
     async def create_user_with_phone(self, data: Dict[str, Any]) -> bool:
         """Create a new patient user with phone-number authentication fields."""
