@@ -7,12 +7,6 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
-class LoginRequest(BaseModel):
-    """Legacy credential payload used to exchange for a JWT."""
-    user_id: str
-    password: str = Field(..., min_length=8)
-
-
 class RegisterRequest(BaseModel):
     """Registration payload for end-user self-signup."""
     name: str = Field(..., min_length=2, max_length=100)

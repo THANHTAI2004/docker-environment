@@ -397,6 +397,27 @@ async def get_device_latest(device_id: str, current_user: dict = Depends(require
     return latest
 
 
+@router.get("/devices/{device_id}/ecg")
+async def get_device_ecg(
+    device_id: str,
+    quality_filter: Optional[str] = Query(default=None, pattern="^(good|fair|poor)$"),
+    limit: int = Query(default=10, le=100),
+    current_user: dict = Depends(require_current_user),
+):
+    """Get ECG waveform history for one device."""
+    await ensure_device_access(current_user, device_id)
+    items = await db.get_device_ecg_readings(
+        device_id=device_id,
+        quality_filter=quality_filter,
+        limit=limit,
+    )
+    return {
+        "device_id": device_id,
+        "count": len(items),
+        "items": items,
+    }
+
+
 @router.get("/devices/{device_id}/summary")
 async def get_device_summary(
     device_id: str,

@@ -8,7 +8,6 @@ from .link import DeviceLink, DeviceLinkDB, DeviceLinkRequest
 from .user import User, UserDB, UserCreate, ThresholdsUpdate, AlertThresholds
 from .auth import (
     AuthenticatedUser,
-    LoginRequest,
     LogoutResponse,
     PhoneLoginRequest,
     RefreshRequest,
@@ -38,7 +37,6 @@ __all__ = [
     "ThresholdsUpdate",
     "AlertThresholds",
     "AuthenticatedUser",
-    "LoginRequest",
     "RegisterRequest",
     "PhoneLoginRequest",
     "RefreshRequest",

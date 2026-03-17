@@ -3,6 +3,16 @@ import pytest
 from app.utils.auth import hash_password
 
 
+def _make_phone_lookup(users):
+    async def fake_get_user_auth_by_phone(phone_number):
+        for user in users.values():
+            if user.get("phone_number") == phone_number:
+                return user
+        return None
+
+    return fake_get_user_auth_by_phone
+
+
 @pytest.mark.asyncio
 async def test_patient_cannot_register_device(client, app_module, monkeypatch):
     users = {
@@ -10,6 +20,7 @@ async def test_patient_cannot_register_device(client, app_module, monkeypatch):
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -21,10 +32,11 @@ async def test_patient_cannot_register_device(client, app_module, monkeypatch):
         return users.get(user_id)
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     token = login.json()["access_token"]
 
@@ -45,6 +57,7 @@ async def test_admin_can_access_device_without_link(client, app_module, monkeypa
             "_id": "10",
             "user_id": "admin-001",
             "name": "Admin One",
+            "phone_number": "+84987654324",
             "role": "admin",
             "is_active": True,
             "password_hash": hash_password("AdminPass123"),
@@ -64,11 +77,12 @@ async def test_admin_can_access_device_without_link(client, app_module, monkeypa
         }
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "admin-001", "password": "AdminPass123"},
+        json={"phone_number": "0987654324", "password": "AdminPass123"},
     )
     token = login.json()["access_token"]
 

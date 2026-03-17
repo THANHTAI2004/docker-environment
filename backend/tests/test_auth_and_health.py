@@ -62,7 +62,7 @@ async def test_login_returns_refresh_token_and_session_id(client, app_module, mo
 
     response = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
 
     body = response.json()
@@ -188,7 +188,7 @@ async def test_register_rejects_future_date_of_birth(client):
         },
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 422
     assert response.json()["message"] == "Date of birth cannot be in the future"
 
 
@@ -270,7 +270,7 @@ async def test_login_with_wrong_password_returns_401(client, app_module, monkeyp
 
     response = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "WrongPass1"},
+        json={"phone_number": "0987654321", "password": "WrongPass1"},
     )
 
     assert response.status_code == 401
@@ -303,7 +303,7 @@ async def test_refresh_rotates_token_and_invalidates_old_refresh(client, app_mod
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     login_body = login.json()
 
@@ -362,7 +362,7 @@ async def test_logout_revokes_current_session(client, app_module, monkeypatch):
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     token = login.json()["access_token"]
 
@@ -411,7 +411,7 @@ async def test_refresh_token_after_logout_is_rejected(client, app_module, monkey
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     login_body = login.json()
 
@@ -435,6 +435,7 @@ async def test_expired_access_token_is_rejected(client, app_module, monkeypatch)
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -516,13 +517,14 @@ async def test_public_device_latest_with_auth_returns_data(client, app_module, m
         }
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
     monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
     monkeypatch.setattr(app_module.db, "get_latest_reading", fake_get_latest_reading)
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     token = login.json()["access_token"]
 
@@ -538,12 +540,71 @@ async def test_public_device_latest_with_auth_returns_data(client, app_module, m
 
 
 @pytest.mark.asyncio
+async def test_device_ecg_endpoint_returns_items(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Chest 1", "device_type": "chest"}
+
+    async def fake_get_device_link(device_id, user_id):
+        return {"device_id": device_id, "user_id": user_id, "link_role": "owner"}
+
+    async def fake_get_device_ecg_readings(device_id, quality_filter=None, limit=10):
+        return [
+            {
+                "_id": "ecg-001",
+                "device_id": device_id,
+                "timestamp": 1771763000.12,
+                "ecg": {"quality": quality_filter or "good", "waveform": [0.1, 0.2, 0.1]},
+            }
+        ]
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+    monkeypatch.setattr(app_module.db, "get_device_ecg_readings", fake_get_device_ecg_readings)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.get(
+        "/api/v1/devices/dev-001/ecg?quality_filter=good&limit=5",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert login.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["device_id"] == "dev-001"
+    assert response.json()["count"] == 1
+    assert response.json()["items"][0]["ecg"]["quality"] == "good"
+
+
+@pytest.mark.asyncio
 async def test_device_summary_tolerates_small_future_clock_skew(client, app_module, monkeypatch):
     users = {
         "patient-001": {
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -575,6 +636,7 @@ async def test_device_summary_tolerates_small_future_clock_skew(client, app_modu
         ]
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
     monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
     monkeypatch.setattr(app_module.db, "get_readings_by_device", fake_get_readings_by_device)
@@ -583,7 +645,7 @@ async def test_device_summary_tolerates_small_future_clock_skew(client, app_modu
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     token = login.json()["access_token"]
 
@@ -609,6 +671,7 @@ async def test_me_devices_returns_linked_devices(client, app_module, monkeypatch
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -630,11 +693,12 @@ async def test_me_devices_returns_linked_devices(client, app_module, monkeypatch
         ]
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "list_devices_for_user", fake_list_devices_for_user)
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     token = login.json()["access_token"]
 
@@ -656,6 +720,7 @@ async def test_linked_user_can_access_device(client, app_module, monkeypatch):
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -681,12 +746,13 @@ async def test_linked_user_can_access_device(client, app_module, monkeypatch):
         return None
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
     monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     token = login.json()["access_token"]
 
@@ -764,6 +830,7 @@ async def test_patient_cannot_access_other_user(client, app_module, monkeypatch)
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -773,6 +840,7 @@ async def test_patient_cannot_access_other_user(client, app_module, monkeypatch)
             "_id": "2",
             "user_id": "patient-002",
             "name": "Patient Two",
+            "phone_number": "+84987654322",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass2"),
@@ -792,11 +860,12 @@ async def test_patient_cannot_access_other_user(client, app_module, monkeypatch)
         return sanitized
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     token = login.json()["access_token"]
 
@@ -816,6 +885,7 @@ async def test_caregiver_can_access_assigned_patient(client, app_module, monkeyp
             "_id": "10",
             "user_id": "caregiver-001",
             "name": "Caregiver One",
+            "phone_number": "+84987654323",
             "role": "caregiver",
             "is_active": True,
             "password_hash": hash_password("CaregiverPass1"),
@@ -825,6 +895,7 @@ async def test_caregiver_can_access_assigned_patient(client, app_module, monkeyp
             "_id": "11",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -844,11 +915,12 @@ async def test_caregiver_can_access_assigned_patient(client, app_module, monkeyp
         return sanitized
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "caregiver-001", "password": "CaregiverPass1"},
+        json={"phone_number": "0987654323", "password": "CaregiverPass1"},
     )
     token = login.json()["access_token"]
 

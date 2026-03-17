@@ -13,6 +13,16 @@ from app.db import (
 from app.utils.auth import hash_password
 
 
+def _make_phone_lookup(users):
+    async def fake_get_user_auth_by_phone(phone_number):
+        for user in users.values():
+            if user.get("phone_number") == phone_number:
+                return user
+        return None
+
+    return fake_get_user_auth_by_phone
+
+
 class _AsyncCursor:
     def __init__(self, docs):
         self._docs = list(docs)
@@ -86,6 +96,7 @@ async def test_request_ecg_returns_already_queued_for_duplicate(client, app_modu
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -111,13 +122,14 @@ async def test_request_ecg_returns_already_queued_for_duplicate(client, app_modu
         }
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
     monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
     monkeypatch.setattr(app_module.db, "enqueue_device_command", fake_enqueue_device_command)
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     token = login.json()["access_token"]
 
@@ -138,6 +150,7 @@ async def test_request_ecg_returns_409_when_pending_limit_reached(client, app_mo
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -158,13 +171,14 @@ async def test_request_ecg_returns_409_when_pending_limit_reached(client, app_mo
         return {"status": "limit_reached", "pending_count": 3}
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
     monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
     monkeypatch.setattr(app_module.db, "enqueue_device_command", fake_enqueue_device_command)
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"user_id": "patient-001", "password": "PatientPass1"},
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
     )
     token = login.json()["access_token"]
 
