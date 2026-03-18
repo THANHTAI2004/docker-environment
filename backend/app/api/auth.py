@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 @router.post("/register")
 async def register(payload: RegisterRequest, request: Request):
-    """Register a new patient account using a phone number and password."""
+    """Register a new user account using a phone number and password."""
     name = payload.name.strip()
     if len(name) < 2:
         raise HTTPException(
@@ -52,7 +52,7 @@ async def register(payload: RegisterRequest, request: Request):
             "phone_number": normalized_phone,
             "date_of_birth": payload.date_of_birth.isoformat(),
             "password_hash": hash_password(payload.password),
-            "role": "manager",
+            "role": "user",
             "is_active": True,
         }
     )
@@ -65,7 +65,7 @@ async def register(payload: RegisterRequest, request: Request):
         {
             "action": "auth.register",
             "actor_id": user_id,
-            "actor_role": "manager",
+            "actor_role": "user",
             "target_id": user_id,
             "request_id": request.state.request_id,
         }

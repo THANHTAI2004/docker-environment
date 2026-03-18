@@ -10,10 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import uuid
 
 from ..db import db
-from ..models import DeviceCaregiverRequest, DeviceRegistration, ECGRequestCommand, ThresholdsUpdate, DeviceLinkRequest
+from ..models import DeviceCaregiverRequest, DeviceRegistration, DeviceViewerRequest, ECGRequestCommand, ThresholdsUpdate, DeviceLinkRequest
 from ..utils.access import (
     ensure_device_manage_access,
-    ensure_device_owner,
     ensure_device_view_access,
     filter_device_response,
 )
@@ -22,6 +21,96 @@ from ..config import settings
 
 router = APIRouter(prefix="/api/v1", tags=["devices"])
 logger = logging.getLogger(__name__)
+
+
+async def _link_device_viewer(
+    device_id: str,
+    target_user_id: str,
+    request: Request,
+    current_user: dict,
+    *,
+    action: str,
+    legacy_path: bool = False,
+):
+    """Attach one viewer to a device owned by the caller."""
+    await ensure_device_manage_access(current_user, device_id)
+
+    target_user = await db.get_user(target_user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    existing_link = await db.get_device_link(device_id, target_user_id)
+    if existing_link and existing_link.get("link_role") == "owner":
+        raise HTTPException(status_code=400, detail="Owner cannot be changed via viewer link endpoint")
+
+    result = await db.upsert_device_link(
+        device_id=device_id,
+        user_id=target_user_id,
+        link_role="viewer",
+        linked_by=current_user["user_id"],
+    )
+    if result == "error":
+        raise HTTPException(status_code=500, detail="Failed to link viewer")
+
+    details = {"user_id": target_user_id, "link_role": "viewer", "result": result}
+    if legacy_path:
+        details["legacy_path"] = True
+    await db.insert_audit_log(
+        {
+            "action": action,
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user["role"],
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+            "details": details,
+        }
+    )
+    return {
+        "status": "linked",
+        "device_id": device_id,
+        "user_id": target_user_id,
+        "link_role": "viewer",
+    }
+
+
+async def _remove_device_viewer(
+    device_id: str,
+    user_id: str,
+    request: Request,
+    current_user: dict,
+    *,
+    action: str,
+    legacy_path: bool = False,
+):
+    """Remove one viewer link from a device owned by the caller."""
+    await ensure_device_manage_access(current_user, device_id)
+
+    link = await db.get_device_link(device_id, user_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    if link.get("link_role") == "owner":
+        raise HTTPException(status_code=400, detail="Owner cannot be removed from this endpoint")
+    if link.get("link_role") != "viewer":
+        raise HTTPException(status_code=400, detail="Target user is not a viewer on this device")
+
+    success = await db.delete_device_link(device_id, user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Link not found")
+
+    details = {"user_id": user_id, "link_role": "viewer"}
+    if legacy_path:
+        details["legacy_path"] = True
+    await db.insert_audit_log(
+        {
+            "action": action,
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user["role"],
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+            "details": details,
+        }
+    )
+    return {"status": "success", "device_id": device_id, "user_id": user_id}
 
 
 @router.post("/devices/register")
@@ -54,50 +143,20 @@ async def link_device_to_user(
     request: Request,
     current_user: dict = Depends(require_current_user),
 ):
-    """Backward-compatible alias for linking one caregiver to a device."""
-    await ensure_device_manage_access(current_user, device_id)
-    if payload.link_role != "caregiver":
+    """Backward-compatible alias for linking one viewer to a device."""
+    if payload.link_role == "owner":
         raise HTTPException(status_code=400, detail="Use /claim for owner assignment")
-
     target_user_id = payload.user_id
     if not target_user_id:
         raise HTTPException(status_code=422, detail="user_id is required")
-    target_user = await db.get_user(target_user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if target_user.get("role") != "caregiver":
-        raise HTTPException(status_code=400, detail="Target user must have caregiver role")
-
-    result = await db.upsert_device_link(
-        device_id=device_id,
-        user_id=target_user_id,
-        link_role="caregiver",
-        linked_by=current_user["user_id"],
+    return await _link_device_viewer(
+        device_id,
+        target_user_id,
+        request,
+        current_user,
+        action="device.link",
+        legacy_path=True,
     )
-    if result == "error":
-        raise HTTPException(status_code=500, detail="Failed to link device")
-
-    await db.insert_audit_log(
-        {
-            "action": "device.link",
-            "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
-            "target_id": device_id,
-            "request_id": request.state.request_id,
-            "details": {
-                "user_id": target_user_id,
-                "link_role": "caregiver",
-                "result": result,
-                "legacy_path": True,
-            },
-        }
-    )
-    return {
-        "status": result,
-        "device_id": device_id,
-        "user_id": target_user_id,
-        "link_role": "caregiver",
-    }
 
 
 @router.post("/devices/{device_id}/claim")
@@ -106,15 +165,13 @@ async def claim_device(
     request: Request,
     current_user: dict = Depends(require_current_user),
 ):
-    """Claim a device as its owner when the caller is a manager."""
+    """Claim a device as its owner when it has not been claimed yet."""
     device = await db.get_device(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
-    if current_user.get("role") != "manager":
-        raise HTTPException(status_code=403, detail="Manager role required")
 
     owner_link = await db.get_device_owner_link(device_id)
-    if owner_link and owner_link.get("user_id") != current_user["user_id"]:
+    if owner_link:
         raise HTTPException(status_code=409, detail="This device already has an owner")
 
     result = await db.upsert_device_link(
@@ -150,40 +207,32 @@ async def add_device_caregiver(
     request: Request,
     current_user: dict = Depends(require_current_user),
 ):
-    """Add one caregiver to a device."""
-    await ensure_device_owner(current_user, device_id)
-
-    target_user = await db.get_user(payload.user_id)
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if target_user.get("role") != "caregiver":
-        raise HTTPException(status_code=400, detail="Target user must have caregiver role")
-
-    result = await db.upsert_device_link(
-        device_id=device_id,
-        user_id=payload.user_id,
-        link_role="caregiver",
-        linked_by=current_user["user_id"],
+    """Backward-compatible alias for adding one viewer to a device."""
+    return await _link_device_viewer(
+        device_id,
+        payload.user_id,
+        request,
+        current_user,
+        action="device.viewer.link",
+        legacy_path=True,
     )
-    if result == "error":
-        raise HTTPException(status_code=500, detail="Failed to link caregiver")
 
-    await db.insert_audit_log(
-        {
-            "action": "device.caregiver.link",
-            "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
-            "target_id": device_id,
-            "request_id": request.state.request_id,
-            "details": {"user_id": payload.user_id},
-        }
+
+@router.post("/devices/{device_id}/viewers")
+async def add_device_viewer(
+    device_id: str,
+    payload: DeviceViewerRequest,
+    request: Request,
+    current_user: dict = Depends(require_current_user),
+):
+    """Add one viewer to a device."""
+    return await _link_device_viewer(
+        device_id,
+        payload.user_id,
+        request,
+        current_user,
+        action="device.viewer.link",
     )
-    return {
-        "status": result,
-        "device_id": device_id,
-        "user_id": payload.user_id,
-        "link_role": "caregiver",
-    }
 
 
 @router.get("/devices/{device_id}/linked-users")
@@ -204,29 +253,15 @@ async def unlink_device_from_user(
     request: Request,
     current_user: dict = Depends(require_current_user),
 ):
-    """Backward-compatible alias for removing a caregiver link."""
-    await ensure_device_manage_access(current_user, device_id)
-    link = await db.get_device_link(device_id, user_id)
-    if not link:
-        raise HTTPException(status_code=404, detail="Link not found")
-    if link.get("link_role") == "owner":
-        raise HTTPException(status_code=400, detail="Use ownership flows for owner links")
-
-    success = await db.delete_device_link(device_id, user_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Link not found")
-
-    await db.insert_audit_log(
-        {
-            "action": "device.unlink",
-            "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
-            "target_id": device_id,
-            "request_id": request.state.request_id,
-            "details": {"user_id": user_id, "legacy_path": True},
-        }
+    """Backward-compatible alias for removing a viewer link."""
+    return await _remove_device_viewer(
+        device_id,
+        user_id,
+        request,
+        current_user,
+        action="device.unlink",
+        legacy_path=True,
     )
-    return {"status": "success", "device_id": device_id, "user_id": user_id}
 
 
 @router.delete("/devices/{device_id}/caregivers/{user_id}")
@@ -236,31 +271,32 @@ async def remove_device_caregiver(
     request: Request,
     current_user: dict = Depends(require_current_user),
 ):
-    """Remove one caregiver from a device."""
-    await ensure_device_owner(current_user, device_id)
-    link = await db.get_device_link(device_id, user_id)
-    if not link:
-        raise HTTPException(status_code=404, detail="Link not found")
-    if link.get("link_role") == "owner":
-        raise HTTPException(status_code=400, detail="Owner cannot be removed from this endpoint")
-    if link.get("link_role") != "caregiver":
-        raise HTTPException(status_code=400, detail="Target user is not a caregiver on this device")
-
-    success = await db.delete_device_link(device_id, user_id)
-    if not success:
-        raise HTTPException(status_code=404, detail="Link not found")
-
-    await db.insert_audit_log(
-        {
-            "action": "device.caregiver.unlink",
-            "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
-            "target_id": device_id,
-            "request_id": request.state.request_id,
-            "details": {"user_id": user_id},
-        }
+    """Backward-compatible alias for removing one viewer from a device."""
+    return await _remove_device_viewer(
+        device_id,
+        user_id,
+        request,
+        current_user,
+        action="device.viewer.unlink",
+        legacy_path=True,
     )
-    return {"status": "success", "device_id": device_id, "user_id": user_id}
+
+
+@router.delete("/devices/{device_id}/viewers/{user_id}")
+async def remove_device_viewer(
+    device_id: str,
+    user_id: str,
+    request: Request,
+    current_user: dict = Depends(require_current_user),
+):
+    """Remove one viewer from a device."""
+    return await _remove_device_viewer(
+        device_id,
+        user_id,
+        request,
+        current_user,
+        action="device.viewer.unlink",
+    )
 
 
 @router.get("/devices/{device_id}")
@@ -418,7 +454,7 @@ async def _build_device_summary(device_id: str, period: str, current_user: dict)
     """Build summary stats while tolerating small device clock drift."""
     import time
 
-    device = await ensure_device_access(current_user, device_id)
+    device = await ensure_device_view_access(current_user, device_id)
 
     periods = {
         "1h": 3600,

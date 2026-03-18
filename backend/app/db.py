@@ -160,6 +160,12 @@ class Database:
             await self.device_links.create_index([("user_id", 1), ("linked_at", -1)])
             await self.device_links.create_index([("device_id", 1), ("linked_at", -1)])
             await self.device_links.create_index([("device_id", 1), ("link_role", 1)])
+            normalized_links = await self.device_links.update_many(
+                {"link_role": "caregiver"},
+                {"$set": {"link_role": "viewer", "updated_at": datetime.utcnow()}},
+            )
+            if normalized_links.modified_count > 0:
+                logger.info("Normalized %s legacy caregiver links to viewer", normalized_links.modified_count)
 
             # Auth sessions
             await self.auth_sessions.create_index([("session_id", 1)], unique=True)
@@ -207,6 +213,43 @@ class Database:
         output.pop("esp_token_hash", None)
         output.pop("password_hash", None)
         return output
+
+    def _normalize_link_role(self, link_role: Optional[str]) -> Optional[str]:
+        """Map legacy link roles to the canonical owner/viewer model."""
+        if link_role == "caregiver":
+            return "viewer"
+        return link_role
+
+    def _normalize_device_link(self, doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Normalize one serialized device-link document."""
+        if not doc:
+            return None
+        normalized = dict(doc)
+        normalized["link_role"] = self._normalize_link_role(normalized.get("link_role"))
+        return normalized
+
+    def _expand_link_roles(self, link_roles: Optional[List[str]]) -> Optional[List[str]]:
+        """Expand canonical link-role filters so legacy caregiver rows still match."""
+        if not link_roles:
+            return None
+
+        expanded: List[str] = []
+        for link_role in link_roles:
+            normalized = self._normalize_link_role(link_role)
+            if normalized == "viewer":
+                expanded.extend(["viewer", "caregiver"])
+            elif normalized:
+                expanded.append(normalized)
+
+        deduped: List[str] = []
+        for link_role in expanded:
+            if link_role not in deduped:
+                deduped.append(link_role)
+        return deduped
+
+    def _device_link_sort_key(self, item: Dict[str, Any]) -> tuple[int, str]:
+        """Sort owner links before viewer links, then by link time."""
+        return (0 if item.get("link_role") == "owner" else 1, item.get("linked_at") or "")
 
     def _make_command_dedupe_key(self, payload: Dict[str, Any]) -> str:
         """Create a stable dedupe key for logically identical commands."""
@@ -280,13 +323,13 @@ class Database:
             return []
 
         try:
-            owned_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner"])
+            accessible_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner", "viewer"])
             if device_id:
-                if device_id not in owned_device_ids:
+                if device_id not in accessible_device_ids:
                     return []
                 target_device_ids = [device_id]
             else:
-                target_device_ids = owned_device_ids
+                target_device_ids = accessible_device_ids
             if not target_device_ids:
                 return []
             query: Dict[str, Any] = {
@@ -378,13 +421,13 @@ class Database:
         if self.health_readings is None:
             return None
         try:
-            owned_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner"])
+            accessible_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner", "viewer"])
             if device_id:
-                if device_id not in owned_device_ids:
+                if device_id not in accessible_device_ids:
                     return None
                 target_device_ids = [device_id]
             else:
-                target_device_ids = owned_device_ids
+                target_device_ids = accessible_device_ids
             if not target_device_ids:
                 return None
             query: Dict[str, Any] = {
@@ -409,13 +452,13 @@ class Database:
         if self.health_readings is None:
             return []
         try:
-            owned_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner"])
-            if not owned_device_ids:
+            accessible_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner", "viewer"])
+            if not accessible_device_ids:
                 return []
             query: Dict[str, Any] = {
                 "$or": [
-                    {"device_id": {"$in": owned_device_ids}},
-                    {"device_uid": {"$in": owned_device_ids}},
+                    {"device_id": {"$in": accessible_device_ids}},
+                    {"device_uid": {"$in": accessible_device_ids}},
                 ],
                 "ecg": {"$exists": True, "$ne": None},
             }
@@ -495,11 +538,11 @@ class Database:
         if self.alerts is None:
             return []
         try:
-            owned_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner"])
+            accessible_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner", "viewer"])
             query: Dict[str, Any] = {
                 "$or": [
                     {"recipient_user_ids": user_id},
-                    {"device_id": {"$in": owned_device_ids}},
+                    {"device_id": {"$in": accessible_device_ids}},
                 ]
             }
             if severity:
@@ -694,7 +737,7 @@ class Database:
             return None
         try:
             doc = await self.device_links.find_one({"device_id": device_id, "user_id": user_id})
-            return self._serialize_doc(doc) if doc else None
+            return self._normalize_device_link(self._serialize_doc(doc)) if doc else None
         except Exception as exc:
             logger.error("Device link query error: %s", exc)
             return None
@@ -705,7 +748,7 @@ class Database:
             return None
         try:
             doc = await self.device_links.find_one({"device_id": device_id, "link_role": "owner"})
-            return self._serialize_doc(doc) if doc else None
+            return self._normalize_device_link(self._serialize_doc(doc)) if doc else None
         except Exception as exc:
             logger.error("Device owner link query error: %s", exc)
             return None
@@ -715,8 +758,11 @@ class Database:
         if self.device_links is None:
             return []
         try:
-            links = [self._serialize_doc(doc) async for doc in self.device_links.find({"device_id": device_id})]
-            links.sort(key=lambda item: (0 if item.get("link_role") == "owner" else 1, item.get("linked_at") or ""))
+            links = [
+                self._normalize_device_link(self._serialize_doc(doc))
+                async for doc in self.device_links.find({"device_id": device_id})
+            ]
+            links.sort(key=self._device_link_sort_key)
             return links
         except Exception as exc:
             logger.error("Device links query error: %s", exc)
@@ -732,10 +778,11 @@ class Database:
         if self.device_links is None:
             return None
         try:
+            expanded_roles = self._expand_link_roles([link_role]) or [link_role]
             doc = await self.device_links.find_one(
-                {"device_id": device_id, "user_id": user_id, "link_role": link_role}
+                {"device_id": device_id, "user_id": user_id, "link_role": {"$in": expanded_roles}}
             )
-            return self._serialize_doc(doc) if doc else None
+            return self._normalize_device_link(self._serialize_doc(doc)) if doc else None
         except Exception as exc:
             logger.error("Device link role query error: %s", exc)
             return None
@@ -745,7 +792,10 @@ class Database:
         if self.device_links is None:
             return []
         try:
-            return [self._serialize_doc(doc) async for doc in self.device_links.find({"user_id": user_id})]
+            return [
+                self._normalize_device_link(self._serialize_doc(doc))
+                async for doc in self.device_links.find({"user_id": user_id})
+            ]
         except Exception as exc:
             logger.error("User device links query error: %s", exc)
             return []
@@ -760,9 +810,10 @@ class Database:
             return []
         try:
             query: Dict[str, Any] = {"user_id": user_id}
-            if link_roles:
-                query["link_role"] = {"$in": list(link_roles)}
-            links = [doc async for doc in self.device_links.find(query, {"device_id": 1, "_id": 0})]
+            expanded_roles = self._expand_link_roles(link_roles)
+            if expanded_roles:
+                query["link_role"] = {"$in": expanded_roles}
+            links = [doc async for doc in self.device_links.find(query)]
             return [doc["device_id"] for doc in links if doc.get("device_id")]
         except Exception as exc:
             logger.error("Device IDs for user query error: %s", exc)
@@ -777,12 +828,12 @@ class Database:
         return bool(actor_device_ids.intersection(target_device_ids))
 
     async def get_alert_recipient_user_ids(self, device_id: str) -> List[str]:
-        """Return owner + caregiver user IDs for one device."""
+        """Return owner + viewer user IDs for one device."""
         links = await self.list_device_links(device_id)
         return [
             link["user_id"]
             for link in links
-            if link.get("link_role") in {"owner", "caregiver"} and link.get("user_id")
+            if link.get("link_role") in {"owner", "viewer"} and link.get("user_id")
         ]
 
     async def upsert_device_link(
@@ -797,6 +848,7 @@ class Database:
             return "error"
         try:
             now = datetime.utcnow()
+            link_role = self._normalize_link_role(link_role) or link_role
             existing = await self.device_links.find_one({"device_id": device_id, "user_id": user_id})
             if existing:
                 await self.device_links.update_one(
@@ -845,7 +897,7 @@ class Database:
             return []
         try:
             links = [
-                self._serialize_doc(doc)
+                self._normalize_device_link(self._serialize_doc(doc))
                 async for doc in self.device_links.find({"user_id": user_id}).sort("linked_at", -1)
             ]
             if not links:
@@ -857,7 +909,7 @@ class Database:
                 async for doc in self.devices.find({"device_id": {"$in": device_ids}})
             }
             device_links = [
-                self._serialize_doc(doc)
+                self._normalize_device_link(self._serialize_doc(doc))
                 async for doc in self.device_links.find({"device_id": {"$in": device_ids}}).sort(
                     [("link_role", 1), ("linked_at", 1)]
                 )
@@ -876,7 +928,6 @@ class Database:
                     {
                         "user_id": linked_user.get("user_id"),
                         "name": linked_user.get("name"),
-                        "role": linked_user.get("role"),
                         "phone_number": linked_user.get("phone_number") or linked_user.get("phone"),
                         "link_role": device_link.get("link_role"),
                     }
@@ -915,7 +966,7 @@ class Database:
             return []
         try:
             links = [
-                self._serialize_doc(doc)
+                self._normalize_device_link(self._serialize_doc(doc))
                 async for doc in self.device_links.find({"device_id": device_id}).sort(
                     [("link_role", 1), ("linked_at", 1)]
                 )
@@ -938,10 +989,7 @@ class Database:
                     {
                         "user_id": user.get("user_id"),
                         "name": user.get("name"),
-                        "role": user.get("role"),
-                        "email": user.get("email"),
                         "phone_number": user.get("phone_number") or user.get("phone"),
-                        "is_active": user.get("is_active"),
                         "link_role": link.get("link_role"),
                         "linked_at": link.get("linked_at"),
                         "linked_by": link.get("linked_by"),

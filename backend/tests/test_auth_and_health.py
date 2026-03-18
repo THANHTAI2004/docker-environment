@@ -127,7 +127,7 @@ async def test_login_with_phone_number_normalizes_and_returns_tokens(client, app
 
 
 @pytest.mark.asyncio
-async def test_register_creates_patient_with_normalized_phone(client, app_module, monkeypatch):
+async def test_register_creates_user_with_normalized_phone(client, app_module, monkeypatch):
     created = {}
 
     async def fake_phone_exists(phone_number):
@@ -167,7 +167,7 @@ async def test_register_creates_patient_with_normalized_phone(client, app_module
     assert saved_user["name"] == "Dang Thanh Tai"
     assert saved_user["phone_number"] == "+84987654321"
     assert saved_user["date_of_birth"] == "2004-02-01"
-    assert saved_user["role"] == "patient"
+    assert saved_user["role"] == "user"
     assert saved_user["is_active"] is True
     assert saved_user["password_hash"] != "MatKhau123"
 
@@ -725,7 +725,6 @@ async def test_me_devices_returns_linked_devices(client, app_module, monkeypatch
                     {
                         "user_id": "patient-001",
                         "name": "Patient One",
-                        "role": "patient",
                         "phone_number": "+84987654321",
                         "link_role": "owner",
                     }
@@ -765,7 +764,7 @@ async def test_me_devices_returns_linked_devices(client, app_module, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_linked_user_can_access_device(client, app_module, monkeypatch):
+async def test_viewer_can_access_device(client, app_module, monkeypatch):
     users = {
         "patient-001": {
             "_id": "1",
@@ -793,7 +792,7 @@ async def test_linked_user_can_access_device(client, app_module, monkeypatch):
 
     async def fake_get_device_link(device_id, user_id):
         if device_id == "dev-001" and user_id == "patient-001":
-            return {"device_id": device_id, "user_id": user_id, "link_role": "owner"}
+            return {"device_id": device_id, "user_id": user_id, "link_role": "viewer"}
         return None
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
@@ -815,6 +814,219 @@ async def test_linked_user_can_access_device(client, app_module, monkeypatch):
     assert login.status_code == 200
     assert response.status_code == 200
     assert response.json()["device_id"] == "dev-001"
+
+
+@pytest.mark.asyncio
+async def test_claim_device_assigns_owner_link(client, app_module, monkeypatch):
+    users = {
+        "user-001": {
+            "_id": "1",
+            "user_id": "user-001",
+            "name": "User One",
+            "phone_number": "+84987654321",
+            "role": "user",
+            "is_active": True,
+            "password_hash": hash_password("UserPass123"),
+            "caregivers": [],
+        }
+    }
+    captured = {}
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Wristband 1", "device_type": "wrist"}
+
+    async def fake_get_device_owner_link(device_id):
+        return None
+
+    async def fake_upsert_device_link(device_id, user_id, link_role, linked_by):
+        captured.update(
+            {
+                "device_id": device_id,
+                "user_id": user_id,
+                "link_role": link_role,
+                "linked_by": linked_by,
+            }
+        )
+        return "linked"
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_owner_link", fake_get_device_owner_link)
+    monkeypatch.setattr(app_module.db, "upsert_device_link", fake_upsert_device_link)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "UserPass123"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.post(
+        "/api/v1/devices/dev-001/claim",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert login.status_code == 200
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "claimed",
+        "device_id": "dev-001",
+        "user_id": "user-001",
+        "link_role": "owner",
+    }
+    assert captured == {
+        "device_id": "dev-001",
+        "user_id": "user-001",
+        "link_role": "owner",
+        "linked_by": "user-001",
+    }
+
+
+@pytest.mark.asyncio
+async def test_claim_device_returns_409_when_owner_exists(client, app_module, monkeypatch):
+    users = {
+        "user-001": {
+            "_id": "1",
+            "user_id": "user-001",
+            "name": "User One",
+            "phone_number": "+84987654321",
+            "role": "user",
+            "is_active": True,
+            "password_hash": hash_password("UserPass123"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Wristband 1", "device_type": "wrist"}
+
+    async def fake_get_device_owner_link(device_id):
+        return {"device_id": device_id, "user_id": "owner-001", "link_role": "owner"}
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_owner_link", fake_get_device_owner_link)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "UserPass123"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.post(
+        "/api/v1/devices/dev-001/claim",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert login.status_code == 200
+    assert response.status_code == 409
+    assert response.json()["message"] == "This device already has an owner"
+
+
+@pytest.mark.asyncio
+async def test_owner_can_add_and_remove_viewer(client, app_module, monkeypatch):
+    users = {
+        "owner-001": {
+            "_id": "1",
+            "user_id": "owner-001",
+            "name": "Owner One",
+            "phone_number": "+84987654321",
+            "role": "user",
+            "is_active": True,
+            "password_hash": hash_password("OwnerPass123"),
+            "caregivers": [],
+        }
+    }
+    target_users = {
+        "viewer-001": {
+            "user_id": "viewer-001",
+            "name": "Viewer One",
+            "phone_number": "+84987654322",
+            "role": "user",
+            "is_active": True,
+        }
+    }
+    links = {
+        "owner-001": {"device_id": "dev-001", "user_id": "owner-001", "link_role": "owner"},
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Wristband 1", "device_type": "wrist"}
+
+    async def fake_get_device_link(device_id, user_id):
+        return links.get(user_id)
+
+    async def fake_get_user(user_id):
+        return target_users.get(user_id)
+
+    async def fake_upsert_device_link(device_id, user_id, link_role, linked_by):
+        links[user_id] = {
+            "device_id": device_id,
+            "user_id": user_id,
+            "link_role": link_role,
+            "linked_by": linked_by,
+        }
+        return "linked"
+
+    async def fake_delete_device_link(device_id, user_id):
+        return links.pop(user_id, None) is not None
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+    monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
+    monkeypatch.setattr(app_module.db, "upsert_device_link", fake_upsert_device_link)
+    monkeypatch.setattr(app_module.db, "delete_device_link", fake_delete_device_link)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "OwnerPass123"},
+    )
+    token = login.json()["access_token"]
+
+    add_response = await client.post(
+        "/api/v1/devices/dev-001/viewers",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"user_id": "viewer-001"},
+    )
+    remove_response = await client.delete(
+        "/api/v1/devices/dev-001/viewers/viewer-001",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert login.status_code == 200
+    assert add_response.status_code == 200
+    assert add_response.json() == {
+        "status": "linked",
+        "device_id": "dev-001",
+        "user_id": "viewer-001",
+        "link_role": "viewer",
+    }
+    assert remove_response.status_code == 200
+    assert remove_response.json() == {
+        "status": "success",
+        "device_id": "dev-001",
+        "user_id": "viewer-001",
+    }
 
 
 @pytest.mark.asyncio

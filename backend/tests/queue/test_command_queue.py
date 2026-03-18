@@ -405,15 +405,93 @@ async def test_list_devices_for_user_includes_linked_users():
         {
             "user_id": "patient-001",
             "name": "Patient One",
-            "role": "patient",
             "phone_number": "+84987654321",
             "link_role": "owner",
         },
         {
             "user_id": "caregiver-001",
             "name": "Caregiver One",
-            "role": "caregiver",
             "phone_number": "+84987654323",
             "link_role": "viewer",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_users_for_device_returns_phone_number_and_link_role():
+    db = Database()
+    db.device_links = _FakeCollection(
+        [
+            {
+                "_id": "link-1",
+                "device_id": "dev-001",
+                "user_id": "owner-001",
+                "link_role": "owner",
+                "linked_at": "2026-03-17T10:01:00Z",
+                "linked_by": "owner-001",
+            },
+            {
+                "_id": "link-2",
+                "device_id": "dev-001",
+                "user_id": "viewer-001",
+                "link_role": "caregiver",
+                "linked_at": "2026-03-17T10:02:00Z",
+                "linked_by": "owner-001",
+            },
+        ]
+    )
+    db.users = _FakeCollection(
+        [
+            {
+                "_id": "user-1",
+                "user_id": "owner-001",
+                "name": "Owner One",
+                "role": "user",
+                "phone_number": "+84987654321",
+            },
+            {
+                "_id": "user-2",
+                "user_id": "viewer-001",
+                "name": "Viewer One",
+                "role": "user",
+                "phone_number": "+84987654322",
+            },
+        ]
+    )
+
+    items = await db.list_users_for_device("dev-001")
+
+    assert items == [
+        {
+            "user_id": "owner-001",
+            "name": "Owner One",
+            "phone_number": "+84987654321",
+            "link_role": "owner",
+            "linked_at": "2026-03-17T10:01:00Z",
+            "linked_by": "owner-001",
+        },
+        {
+            "user_id": "viewer-001",
+            "name": "Viewer One",
+            "phone_number": "+84987654322",
+            "link_role": "viewer",
+            "linked_at": "2026-03-17T10:02:00Z",
+            "linked_by": "owner-001",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_alert_recipients_include_owner_and_viewer_links():
+    db = Database()
+    db.device_links = _FakeCollection(
+        [
+            {"_id": "1", "device_id": "dev-001", "user_id": "owner-001", "link_role": "owner"},
+            {"_id": "2", "device_id": "dev-001", "user_id": "viewer-001", "link_role": "viewer"},
+            {"_id": "3", "device_id": "dev-001", "user_id": "legacy-001", "link_role": "caregiver"},
+        ]
+    )
+
+    recipients = await db.get_alert_recipient_user_ids("dev-001")
+
+    assert recipients == ["owner-001", "viewer-001", "legacy-001"]

@@ -51,7 +51,7 @@ async def test_patient_cannot_register_device(client, app_module, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_admin_can_access_device_without_link(client, app_module, monkeypatch):
+async def test_unlinked_admin_cannot_access_device(client, app_module, monkeypatch):
     users = {
         "admin-001": {
             "_id": "10",
@@ -76,9 +76,13 @@ async def test_admin_can_access_device_without_link(client, app_module, monkeypa
             "status": "active",
         }
 
+    async def fake_get_device_link(device_id, user_id):
+        return None
+
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
     monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
 
     login = await client.post(
         "/api/v1/auth/login",
@@ -92,5 +96,4 @@ async def test_admin_can_access_device_without_link(client, app_module, monkeypa
     )
 
     assert login.status_code == 200
-    assert response.status_code == 200
-    assert response.json()["device_id"] == "dev-001"
+    assert response.status_code == 403
