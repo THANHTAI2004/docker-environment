@@ -44,7 +44,7 @@ async def register(payload: RegisterRequest, request: Request):
     if await db.phone_exists(normalized_phone):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone number already registered")
 
-    user_id = await db.generate_patient_user_id()
+    user_id = await db.generate_user_id()
     created = await db.create_user_with_phone(
         {
             "user_id": user_id,

@@ -1384,20 +1384,20 @@ class Database:
             logger.error("Phone exists query error: %s", exc)
             return False
 
-    async def generate_patient_user_id(self) -> str:
-        """Generate a collision-resistant internal manager user ID."""
+    async def generate_user_id(self) -> str:
+        """Generate a collision-resistant internal user ID."""
         if self.users is None:
-            return f"manager-{secrets.token_hex(4)}"
+            return f"user-{secrets.token_hex(4)}"
 
         for _ in range(5):
-            candidate = f"manager-{secrets.token_hex(4)}"
+            candidate = f"user-{secrets.token_hex(4)}"
             existing = await self.users.find_one({"user_id": candidate}, {"_id": 1})
             if existing is None:
                 return candidate
-        return f"manager-{secrets.token_hex(8)}"
+        return f"user-{secrets.token_hex(8)}"
 
     async def create_user_with_phone(self, data: Dict[str, Any]) -> bool:
-        """Create a new patient user with phone-number authentication fields."""
+        """Create a new user account with phone-number authentication fields."""
         if self.users is None:
             return False
         try:

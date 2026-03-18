@@ -14,15 +14,12 @@ async def ensure_user_access(principal: Dict[str, Any], target_user_id: str) -> 
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    role = principal.get("role")
     actor_user_id = principal.get("user_id")
-    if role == "admin":
-        return user
+    if not actor_user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     if actor_user_id == target_user_id:
         return user
     if actor_user_id and await db.users_share_device_access(actor_user_id, target_user_id):
-        return user
-    if role == "caregiver" and actor_user_id in user.get("caregivers", []):
         return user
 
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")

@@ -87,6 +87,8 @@ Dung de hien thi ten, role, email, phone, trang thai active.
 
 `GET /api/v1/me/devices`
 
+Contract chinh thuc duoc mo ta tai `docs/me-devices-contract.md`.
+
 Response:
 
 ```json

@@ -133,8 +133,8 @@ async def test_register_creates_user_with_normalized_phone(client, app_module, m
     async def fake_phone_exists(phone_number):
         return phone_number in created
 
-    async def fake_generate_patient_user_id():
-        return "patient-a1b2c3d4"
+    async def fake_generate_user_id():
+        return "user-a1b2c3d4"
 
     async def fake_create_user_with_phone(doc):
         created[doc["phone_number"]] = dict(doc)
@@ -144,7 +144,7 @@ async def test_register_creates_user_with_normalized_phone(client, app_module, m
         return True
 
     monkeypatch.setattr(app_module.db, "phone_exists", fake_phone_exists)
-    monkeypatch.setattr(app_module.db, "generate_patient_user_id", fake_generate_patient_user_id)
+    monkeypatch.setattr(app_module.db, "generate_user_id", fake_generate_user_id)
     monkeypatch.setattr(app_module.db, "create_user_with_phone", fake_create_user_with_phone)
     monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
 
@@ -161,7 +161,7 @@ async def test_register_creates_user_with_normalized_phone(client, app_module, m
     body = response.json()
     saved_user = created["+84987654321"]
     assert response.status_code == 200
-    assert body == {"status": "success", "user_id": "patient-a1b2c3d4"}
+    assert body == {"status": "success", "user_id": "user-a1b2c3d4"}
     assert isinstance(body["status"], str)
     assert isinstance(body["user_id"], str)
     assert saved_user["name"] == "Dang Thanh Tai"
@@ -727,6 +727,12 @@ async def test_me_devices_returns_linked_devices(client, app_module, monkeypatch
                         "name": "Patient One",
                         "phone_number": "+84987654321",
                         "link_role": "owner",
+                    },
+                    {
+                        "user_id": "viewer-001",
+                        "name": "Viewer One",
+                        "phone_number": "+84987654322",
+                        "link_role": "viewer",
                     }
                 ],
             }
@@ -760,6 +766,8 @@ async def test_me_devices_returns_linked_devices(client, app_module, monkeypatch
     assert isinstance(body["items"][0]["linked_users"], list)
     assert body["items"][0]["linked_users"][0]["user_id"] == "patient-001"
     assert body["items"][0]["linked_users"][0]["phone_number"] == "+84987654321"
+    assert body["items"][0]["linked_users"][0]["link_role"] == "owner"
+    assert body["items"][0]["linked_users"][1]["link_role"] == "viewer"
     assert "deviceId" not in body["items"][0]
 
 
@@ -1030,6 +1038,306 @@ async def test_owner_can_add_and_remove_viewer(client, app_module, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_viewer_cannot_add_viewer(client, app_module, monkeypatch):
+    users = {
+        "viewer-001": {
+            "_id": "1",
+            "user_id": "viewer-001",
+            "name": "Viewer One",
+            "phone_number": "+84987654321",
+            "role": "user",
+            "is_active": True,
+            "password_hash": hash_password("ViewerPass123"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Wristband 1", "device_type": "wrist"}
+
+    async def fake_get_device_link(device_id, user_id):
+        return {"device_id": device_id, "user_id": user_id, "link_role": "viewer"}
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "ViewerPass123"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.post(
+        "/api/v1/devices/dev-001/viewers",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"user_id": "viewer-002"},
+    )
+
+    assert login.status_code == 200
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_can_remove_viewer(client, app_module, monkeypatch):
+    users = {
+        "owner-001": {
+            "_id": "1",
+            "user_id": "owner-001",
+            "name": "Owner One",
+            "phone_number": "+84987654321",
+            "role": "user",
+            "is_active": True,
+            "password_hash": hash_password("OwnerPass123"),
+            "caregivers": [],
+        }
+    }
+    links = {
+        "owner-001": {"device_id": "dev-001", "user_id": "owner-001", "link_role": "owner"},
+        "viewer-001": {"device_id": "dev-001", "user_id": "viewer-001", "link_role": "viewer"},
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Wristband 1", "device_type": "wrist"}
+
+    async def fake_get_device_link(device_id, user_id):
+        return links.get(user_id)
+
+    async def fake_delete_device_link(device_id, user_id):
+        return links.pop(user_id, None) is not None
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+    monkeypatch.setattr(app_module.db, "delete_device_link", fake_delete_device_link)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "OwnerPass123"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.delete(
+        "/api/v1/devices/dev-001/viewers/viewer-001",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert login.status_code == 200
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "success",
+        "device_id": "dev-001",
+        "user_id": "viewer-001",
+    }
+
+
+@pytest.mark.asyncio
+async def test_viewer_cannot_request_ecg(client, app_module, monkeypatch):
+    users = {
+        "viewer-001": {
+            "_id": "1",
+            "user_id": "viewer-001",
+            "name": "Viewer One",
+            "phone_number": "+84987654321",
+            "role": "user",
+            "is_active": True,
+            "password_hash": hash_password("ViewerPass123"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Chest 1", "device_type": "chest"}
+
+    async def fake_get_device_link(device_id, user_id):
+        return {"device_id": device_id, "user_id": user_id, "link_role": "viewer"}
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "ViewerPass123"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.post(
+        "/api/v1/devices/dev-001/ecg/request",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"duration_seconds": 10, "sampling_rate": 250},
+    )
+
+    assert login.status_code == 200
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_viewer_can_access_latest_history_summary_and_ecg(client, app_module, monkeypatch):
+    users = {
+        "viewer-001": {
+            "_id": "1",
+            "user_id": "viewer-001",
+            "name": "Viewer One",
+            "phone_number": "+84987654321",
+            "role": "user",
+            "is_active": True,
+            "password_hash": hash_password("ViewerPass123"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Chest 1", "device_type": "chest", "status": "active"}
+
+    async def fake_get_device_link(device_id, user_id):
+        return {"device_id": device_id, "user_id": user_id, "link_role": "viewer"}
+
+    async def fake_get_latest_reading(device_id):
+        return {
+            "_id": "reading-001",
+            "device_id": device_id,
+            "timestamp": 1771763000.12,
+            "vitals": {"heart_rate": 82, "spo2": 98},
+        }
+
+    async def fake_get_readings_by_device(device_id, start_time=None, end_time=None, limit=100):
+        return [
+            {
+                "_id": "reading-002",
+                "device_id": device_id,
+                "timestamp": 1771763000.12,
+                "vitals": {"heart_rate": 82, "spo2": 98, "temperature": 36.7},
+            }
+        ]
+
+    async def fake_get_device_ecg_readings(device_id, quality_filter=None, limit=10):
+        return [
+            {
+                "_id": "ecg-001",
+                "device_id": device_id,
+                "timestamp": 1771763000.12,
+                "ecg": {"quality": quality_filter or "good", "waveform": [0.1, 0.2, 0.1]},
+            }
+        ]
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+    monkeypatch.setattr(app_module.db, "get_latest_reading", fake_get_latest_reading)
+    monkeypatch.setattr(app_module.db, "get_readings_by_device", fake_get_readings_by_device)
+    monkeypatch.setattr(app_module.db, "get_device_ecg_readings", fake_get_device_ecg_readings)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "ViewerPass123"},
+    )
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    latest = await client.get("/api/v1/devices/dev-001/latest", headers=headers)
+    history = await client.get("/api/v1/devices/dev-001/history", headers=headers)
+    summary = await client.get("/api/v1/devices/dev-001/summary", headers=headers)
+    ecg = await client.get("/api/v1/devices/dev-001/ecg", headers=headers)
+
+    assert login.status_code == 200
+    assert latest.status_code == 200
+    assert history.status_code == 200
+    assert summary.status_code == 200
+    assert ecg.status_code == 200
+    assert latest.json()["device_id"] == "dev-001"
+    assert history.json()["device_id"] == "dev-001"
+    assert summary.json()["device_id"] == "dev-001"
+    assert ecg.json()["device_id"] == "dev-001"
+
+
+@pytest.mark.asyncio
+async def test_linked_users_returns_link_roles(client, app_module, monkeypatch):
+    users = {
+        "owner-001": {
+            "_id": "1",
+            "user_id": "owner-001",
+            "name": "Owner One",
+            "phone_number": "+84987654321",
+            "role": "user",
+            "is_active": True,
+            "password_hash": hash_password("OwnerPass123"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_name": "Wristband 1", "device_type": "wrist", "status": "active"}
+
+    async def fake_get_device_link(device_id, user_id):
+        return {"device_id": device_id, "user_id": user_id, "link_role": "owner"}
+
+    async def fake_list_users_for_device(device_id):
+        return [
+            {
+                "user_id": "owner-001",
+                "name": "Owner One",
+                "phone_number": "+84987654321",
+                "link_role": "owner",
+            },
+            {
+                "user_id": "viewer-001",
+                "name": "Viewer One",
+                "phone_number": "+84987654322",
+                "link_role": "viewer",
+            },
+        ]
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+    monkeypatch.setattr(app_module.db, "list_users_for_device", fake_list_users_for_device)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "OwnerPass123"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.get(
+        "/api/v1/devices/dev-001/linked-users",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    body = response.json()
+    assert login.status_code == 200
+    assert response.status_code == 200
+    assert body["device_id"] == "dev-001"
+    assert body["count"] == 2
+    assert body["items"][0]["link_role"] == "owner"
+    assert body["items"][1]["link_role"] == "viewer"
+
+
+@pytest.mark.asyncio
 async def test_create_user_rejects_admin_api_key_when_bootstrap_disabled(client, app_module, monkeypatch):
     async def fake_create_user(doc):
         return True
@@ -1142,27 +1450,27 @@ async def test_patient_cannot_access_other_user(client, app_module, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_caregiver_can_access_assigned_patient(client, app_module, monkeypatch):
+async def test_users_with_shared_device_access_can_view_each_other(client, app_module, monkeypatch):
     users = {
-        "caregiver-001": {
+        "user-001": {
             "_id": "10",
-            "user_id": "caregiver-001",
-            "name": "Caregiver One",
+            "user_id": "user-001",
+            "name": "User One",
             "phone_number": "+84987654323",
-            "role": "caregiver",
+            "role": "user",
             "is_active": True,
-            "password_hash": hash_password("CaregiverPass1"),
+            "password_hash": hash_password("SharedPass1"),
             "caregivers": [],
         },
-        "patient-001": {
+        "user-002": {
             "_id": "11",
-            "user_id": "patient-001",
-            "name": "Patient One",
+            "user_id": "user-002",
+            "name": "User Two",
             "phone_number": "+84987654321",
-            "role": "patient",
+            "role": "user",
             "is_active": True,
-            "password_hash": hash_password("PatientPass1"),
-            "caregivers": ["caregiver-001"],
+            "password_hash": hash_password("OtherPass1"),
+            "caregivers": [],
         },
     }
 
@@ -1177,21 +1485,25 @@ async def test_caregiver_can_access_assigned_patient(client, app_module, monkeyp
         sanitized.pop("password_hash", None)
         return sanitized
 
+    async def fake_users_share_device_access(actor_user_id, target_user_id):
+        return actor_user_id == "user-001" and target_user_id == "user-002"
+
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
     monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
     monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
+    monkeypatch.setattr(app_module.db, "users_share_device_access", fake_users_share_device_access)
 
     login = await client.post(
         "/api/v1/auth/login",
-        json={"phone_number": "0987654323", "password": "CaregiverPass1"},
+        json={"phone_number": "0987654323", "password": "SharedPass1"},
     )
     token = login.json()["access_token"]
 
     response = await client.get(
-        "/api/v1/users/patient-001",
+        "/api/v1/users/user-002",
         headers={"Authorization": f"Bearer {token}"},
     )
 
     assert login.status_code == 200
     assert response.status_code == 200
-    assert response.json()["user_id"] == "patient-001"
+    assert response.json()["user_id"] == "user-002"
