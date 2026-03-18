@@ -165,7 +165,7 @@ class Database:
                 {"$set": {"link_role": "viewer", "updated_at": datetime.utcnow()}},
             )
             if normalized_links.modified_count > 0:
-                logger.info("Normalized %s legacy caregiver links to viewer", normalized_links.modified_count)
+                logger.info("Normalized %s legacy device-view links to viewer", normalized_links.modified_count)
 
             # Auth sessions
             await self.auth_sessions.create_index([("session_id", 1)], unique=True)
@@ -215,7 +215,7 @@ class Database:
         return output
 
     def _normalize_link_role(self, link_role: Optional[str]) -> Optional[str]:
-        """Map legacy link roles to the canonical owner/viewer model."""
+        """Map legacy link-role aliases to the canonical owner/viewer model."""
         if link_role == "caregiver":
             return "viewer"
         return link_role
@@ -229,7 +229,7 @@ class Database:
         return normalized
 
     def _expand_link_roles(self, link_roles: Optional[List[str]]) -> Optional[List[str]]:
-        """Expand canonical link-role filters so legacy caregiver rows still match."""
+        """Expand canonical link-role filters so legacy viewer aliases still match."""
         if not link_roles:
             return None
 

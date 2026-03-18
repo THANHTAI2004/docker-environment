@@ -9,14 +9,12 @@ from ..db import db
 
 
 async def ensure_user_access(principal: Dict[str, Any], target_user_id: str) -> Dict[str, Any]:
-    """Ensure the actor can view or manage the target user."""
+    """Ensure the actor can view the target user via self or shared-device access."""
     user = await db.get_user(target_user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     actor_user_id = principal.get("user_id")
-    if not actor_user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
     if actor_user_id == target_user_id:
         return user
     if actor_user_id and await db.users_share_device_access(actor_user_id, target_user_id):
