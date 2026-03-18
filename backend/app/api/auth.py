@@ -109,11 +109,12 @@ async def login(payload: PhoneLoginRequest, request: Request):
 async def refresh_tokens(payload: RefreshRequest, request: Request):
     """Rotate a refresh token and issue a new token pair."""
     tokens = await rotate_refresh_session(payload.refresh_token)
+    user = await db.get_user_auth(tokens["user_id"])
     await db.insert_audit_log(
         {
             "action": "auth.refresh",
             "actor_id": tokens["user_id"],
-            "actor_role": tokens["role"],
+            "actor_role": user.get("role", "user") if user else "user",
             "target_id": tokens["session_id"],
             "request_id": request.state.request_id,
         }

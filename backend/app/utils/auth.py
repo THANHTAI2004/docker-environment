@@ -67,9 +67,7 @@ def create_access_token(user: Dict[str, Any], session_id: str) -> tuple[str, dat
     expires_at = issued_at + timedelta(minutes=settings.jwt_access_token_exp_minutes)
     payload = {
         "sub": user["user_id"],
-        "role": user["role"],
         "sid": session_id,
-        "jti": secrets.token_urlsafe(8),
         "token_type": "access",
         "exp": expires_at,
         "iat": issued_at,
@@ -123,25 +121,6 @@ def peek_token_subject(authorization: str | None) -> str | None:
         return None
 
 
-def peek_token_role(authorization: str | None) -> str | None:
-    """Best-effort role extraction for logging and metrics labels."""
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    token = authorization[7:].strip()
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
-            options={"verify_exp": False},
-        )
-        return payload.get("role")
-    except jwt.InvalidTokenError:
-        return None
-
-
 def generate_refresh_token() -> str:
     """Generate an opaque refresh token that can be rotated and revoked."""
     return secrets.token_urlsafe(48)
@@ -173,7 +152,6 @@ async def issue_session_tokens(user: Dict[str, Any]) -> Dict[str, Any]:
         {
             "session_id": session_id,
             "user_id": user["user_id"],
-            "role": user["role"],
             "refresh_token_hash": hash_refresh_token(refresh_token),
             "expires_at": refresh_expires_at,
         }
@@ -193,8 +171,6 @@ async def issue_session_tokens(user: Dict[str, Any]) -> Dict[str, Any]:
         "refresh_expires_at": refresh_expires_at.replace(tzinfo=timezone.utc).isoformat(),
         "session_id": session_id,
         "user_id": user["user_id"],
-        "role": user["role"],
-        "scopes": [user["role"]],
     }
 
 
@@ -241,8 +217,6 @@ async def rotate_refresh_session(refresh_token: str) -> Dict[str, Any]:
         "refresh_expires_at": refresh_expires_at.replace(tzinfo=timezone.utc).isoformat(),
         "session_id": session["session_id"],
         "user_id": user["user_id"],
-        "role": user["role"],
-        "scopes": [user["role"]],
     }
 
 
@@ -269,6 +243,7 @@ async def require_admin_api_key(x_api_key: str | None = Header(default=None)):
         return {
             "user_id": "system-admin",
             "role": "admin",
+            "is_system_admin": True,
             "auth_type": "api_key",
             "is_active": True,
         }
@@ -323,13 +298,14 @@ async def require_current_user(authorization: str | None = Header(default=None))
 
     user["auth_type"] = "jwt"
     user["session_id"] = session_id
+    user["is_system_admin"] = user.get("role") == "admin"
     return user
 
 
 async def require_admin_user(authorization: str | None = Header(default=None)) -> Dict[str, Any]:
     """Require an admin JWT and disallow API-key fallback."""
     user = await require_current_user(authorization)
-    if user.get("role") == "admin":
+    if user.get("is_system_admin"):
         return user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,

@@ -65,7 +65,13 @@ class HealthService:
                 return True
 
             device = await db.get_device(reading.device_id)
-            device_thresholds = device.get("alert_thresholds") if device else None
+            device_thresholds = None
+            if device:
+                settings = device.get("settings") or {}
+                if isinstance(settings, dict):
+                    device_thresholds = settings.get("alert_thresholds")
+                if device_thresholds is None:
+                    device_thresholds = device.get("alert_thresholds")
             await alert_service.check_health_reading(doc, device_thresholds)
             return True
         except Exception as exc:

@@ -33,7 +33,6 @@ from .observability import (
 )
 from .utils.access import ensure_device_access
 from .utils.auth import (
-    peek_token_role,
     peek_token_subject,
     require_admin_principal,
     require_current_user,
@@ -119,7 +118,9 @@ app = FastAPI(
     * **Health Data Management** - Store and retrieve vital signs, ECG waveforms
     * **Alert System** - Automatic threshold-based alerts with customizable levels
     * **Device Management** - Register and track wearable devices
-    * **User Management** - Patient and caregiver profiles with custom thresholds
+    * **Account Management** - Shared user accounts with phone-number authentication
+    * **Access Control** - Owner/viewer permissions driven by device links
+    * **Device Settings** - Owner-managed alert thresholds stored per device
     
     ## Alert Thresholds
     
@@ -192,7 +193,6 @@ async def rate_limit_middleware(request: Request, call_next):
                     "category": category,
                     "client_ip": request.client.host if request.client else None,
                     "user_id": peek_token_subject(request.headers.get("authorization")),
-                    "role": peek_token_role(request.headers.get("authorization")),
                     "device_id": _request_device_id(request.url.path),
                 }
             },
@@ -221,7 +221,6 @@ async def rate_limit_middleware(request: Request, call_next):
                 "latency_ms": latency_ms,
                 "client_ip": request.client.host if request.client else None,
                 "user_id": peek_token_subject(request.headers.get("authorization")),
-                "role": peek_token_role(request.headers.get("authorization")),
                 "device_id": _request_device_id(request.url.path),
             }
         },

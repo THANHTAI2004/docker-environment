@@ -12,15 +12,22 @@ import uuid
 from ..db import db
 from ..models import DeviceCaregiverRequest, DeviceRegistration, DeviceViewerRequest, ECGRequestCommand, ThresholdsUpdate, DeviceLinkRequest
 from ..utils.access import (
-    ensure_device_manage_access,
-    ensure_device_view_access,
     filter_device_response,
+    require_device_owner,
+    require_device_read_access,
 )
 from ..utils.auth import hash_device_token, require_current_user, require_admin_user
 from ..config import settings
 
 router = APIRouter(prefix="/api/v1", tags=["devices"])
 logger = logging.getLogger(__name__)
+
+
+def _permission_of_link(link: Optional[dict]) -> Optional[str]:
+    """Read one link permission from canonical or legacy shapes."""
+    if not link:
+        return None
+    return link.get("permission") or link.get("link_role")
 
 
 async def _link_device_viewer(
@@ -33,26 +40,26 @@ async def _link_device_viewer(
     legacy_path: bool = False,
 ):
     """Attach one viewer to a device owned by the caller."""
-    await ensure_device_manage_access(current_user, device_id)
+    await require_device_owner(current_user, device_id)
 
     target_user = await db.get_user(target_user_id)
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
 
     existing_link = await db.get_device_link(device_id, target_user_id)
-    if existing_link and existing_link.get("link_role") == "owner":
+    if existing_link and _permission_of_link(existing_link) == "owner":
         raise HTTPException(status_code=400, detail="Owner cannot be changed via viewer link endpoint")
 
     result = await db.upsert_device_link(
         device_id=device_id,
         user_id=target_user_id,
-        link_role="viewer",
-        linked_by=current_user["user_id"],
+        permission="viewer",
+        added_by_user_id=current_user["user_id"],
     )
     if result == "error":
         raise HTTPException(status_code=500, detail="Failed to link viewer")
 
-    details = {"user_id": target_user_id, "link_role": "viewer", "result": result}
+    details = {"user_id": target_user_id, "permission": "viewer", "result": result}
     if legacy_path:
         details["legacy_path"] = True
     await db.insert_audit_log(
@@ -69,6 +76,7 @@ async def _link_device_viewer(
         "status": "linked",
         "device_id": device_id,
         "user_id": target_user_id,
+        "permission": "viewer",
         "link_role": "viewer",
     }
 
@@ -83,21 +91,21 @@ async def _remove_device_viewer(
     legacy_path: bool = False,
 ):
     """Remove one viewer link from a device owned by the caller."""
-    await ensure_device_manage_access(current_user, device_id)
+    await require_device_owner(current_user, device_id)
 
     link = await db.get_device_link(device_id, user_id)
     if not link:
         raise HTTPException(status_code=404, detail="Link not found")
-    if link.get("link_role") == "owner":
+    if _permission_of_link(link) == "owner":
         raise HTTPException(status_code=400, detail="Owner cannot be removed from this endpoint")
-    if link.get("link_role") != "viewer":
+    if _permission_of_link(link) != "viewer":
         raise HTTPException(status_code=400, detail="Target user is not a viewer on this device")
 
     success = await db.delete_device_link(device_id, user_id)
     if not success:
         raise HTTPException(status_code=404, detail="Link not found")
 
-    details = {"user_id": user_id, "link_role": "viewer"}
+    details = {"user_id": user_id, "permission": "viewer"}
     if legacy_path:
         details["legacy_path"] = True
     await db.insert_audit_log(
@@ -144,7 +152,7 @@ async def link_device_to_user(
     current_user: dict = Depends(require_current_user),
 ):
     """Backward-compatible alias for linking one viewer to a device."""
-    if payload.link_role == "owner":
+    if payload.permission == "owner":
         raise HTTPException(status_code=400, detail="Use /claim for owner assignment")
     target_user_id = payload.user_id
     if not target_user_id:
@@ -177,8 +185,8 @@ async def claim_device(
     result = await db.upsert_device_link(
         device_id=device_id,
         user_id=current_user["user_id"],
-        link_role="owner",
-        linked_by=current_user["user_id"],
+        permission="owner",
+        added_by_user_id=current_user["user_id"],
     )
     if result == "error":
         raise HTTPException(status_code=500, detail="Failed to claim device")
@@ -196,6 +204,7 @@ async def claim_device(
         "status": "claimed",
         "device_id": device_id,
         "user_id": current_user["user_id"],
+        "permission": "owner",
         "link_role": "owner",
     }
 
@@ -235,13 +244,28 @@ async def add_device_viewer(
     )
 
 
+@router.get("/devices/{device_id}/viewers")
+async def get_device_viewers(
+    device_id: str,
+    current_user: dict = Depends(require_current_user),
+):
+    """List viewer links for one device."""
+    await require_device_owner(current_user, device_id)
+    items = [
+        item
+        for item in await db.list_users_for_device(device_id)
+        if (item.get("permission") or item.get("link_role")) == "viewer"
+    ]
+    return {"device_id": device_id, "count": len(items), "items": items}
+
+
 @router.get("/devices/{device_id}/linked-users")
 async def get_device_linked_users(
     device_id: str,
     current_user: dict = Depends(require_current_user),
 ):
     """List the users linked to one device."""
-    await ensure_device_view_access(current_user, device_id)
+    await require_device_read_access(current_user, device_id)
     items = await db.list_users_for_device(device_id)
     return {"device_id": device_id, "count": len(items), "items": items}
 
@@ -302,7 +326,7 @@ async def remove_device_viewer(
 @router.get("/devices/{device_id}")
 async def get_device(device_id: str, current_user: dict = Depends(require_current_user)):
     """Get device details."""
-    device = await ensure_device_view_access(current_user, device_id)
+    device = await require_device_read_access(current_user, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
     return filter_device_response(device, current_user)
@@ -316,7 +340,7 @@ async def request_ecg(
     current_user: dict = Depends(require_current_user),
 ):
     """Queue ECG command; ESP will receive it via REST polling."""
-    await ensure_device_manage_access(current_user, device_id)
+    await require_device_owner(current_user, device_id)
 
     request_id = str(uuid.uuid4())
     expires_at = datetime.utcnow() + timedelta(seconds=settings.command_ttl_seconds)
@@ -378,7 +402,7 @@ async def update_device_thresholds(
     current_user: dict = Depends(require_current_user),
 ):
     """Update alert thresholds stored directly on one device."""
-    await ensure_device_manage_access(current_user, device_id)
+    await require_device_owner(current_user, device_id)
     threshold_dict = {k: v for k, v in thresholds.model_dump().items() if v is not None}
     if not threshold_dict:
         raise HTTPException(status_code=400, detail="No thresholds provided")
@@ -407,7 +431,7 @@ async def rotate_esp_token(
     current_user: dict = Depends(require_current_user),
 ):
     """Generate and set new ESP token for a device (shown only once)."""
-    await ensure_device_manage_access(current_user, device_id)
+    await require_device_owner(current_user, device_id)
 
     token = secrets.token_urlsafe(32)
     token_hash = hash_device_token(token)
@@ -436,7 +460,7 @@ async def _get_device_history(
     limit: int,
     current_user: dict,
 ):
-    await ensure_device_view_access(current_user, device_id)
+    await require_device_read_access(current_user, device_id)
     items = await db.get_readings_by_device(
         device_id=device_id,
         start_time=start_time,
@@ -454,7 +478,7 @@ async def _build_device_summary(device_id: str, period: str, current_user: dict)
     """Build summary stats while tolerating small device clock drift."""
     import time
 
-    device = await ensure_device_view_access(current_user, device_id)
+    device = await require_device_read_access(current_user, device_id)
 
     periods = {
         "1h": 3600,
@@ -544,7 +568,7 @@ async def get_device_vitals(
 @router.get("/devices/{device_id}/latest")
 async def get_device_latest(device_id: str, current_user: dict = Depends(require_current_user)):
     """Get most recent reading from one device."""
-    await ensure_device_view_access(current_user, device_id)
+    await require_device_read_access(current_user, device_id)
     latest = await db.get_latest_reading(device_id)
     if not latest:
         raise HTTPException(status_code=404, detail="No data found for this device")
@@ -559,7 +583,7 @@ async def get_device_ecg(
     current_user: dict = Depends(require_current_user),
 ):
     """Get ECG waveform history for one device."""
-    await ensure_device_view_access(current_user, device_id)
+    await require_device_read_access(current_user, device_id)
     items = await db.get_device_ecg_readings(
         device_id=device_id,
         quality_filter=quality_filter,
@@ -588,7 +612,7 @@ async def get_device_summary(
 async def get_public_device(device_id: str, current_user: dict = Depends(require_current_user)):
     """Authenticated device profile alias kept for backward compatibility."""
     logger.warning("Deprecated public device endpoint used for device=%s", device_id)
-    device = await ensure_device_view_access(current_user, device_id)
+    device = await require_device_read_access(current_user, device_id)
     return {
         "device_id": device.get("device_id"),
         "device_type": device.get("device_type"),
@@ -610,7 +634,7 @@ async def get_public_device_history(
 ):
     """Authenticated history alias kept for backward compatibility."""
     logger.warning("Deprecated public device history endpoint used for device=%s", device_id)
-    await ensure_device_view_access(current_user, device_id)
+    await require_device_read_access(current_user, device_id)
     items = await db.get_readings_by_device(
         device_id=device_id,
         start_time=start_time,
@@ -627,7 +651,7 @@ async def get_public_device_latest(
 ):
     """Authenticated latest-reading alias kept for backward compatibility."""
     logger.warning("Deprecated public device latest endpoint used for device=%s", device_id)
-    await ensure_device_view_access(current_user, device_id)
+    await require_device_read_access(current_user, device_id)
     latest = await db.get_latest_reading(device_id)
     if not latest:
         raise HTTPException(status_code=404, detail="No data found for this device")
@@ -643,7 +667,7 @@ async def get_public_device_ecg(
 ):
     """Authenticated ECG history alias kept for backward compatibility."""
     logger.warning("Deprecated public device ECG endpoint used for device=%s", device_id)
-    await ensure_device_view_access(current_user, device_id)
+    await require_device_read_access(current_user, device_id)
     items = await db.get_device_ecg_readings(
         device_id=device_id,
         quality_filter=quality_filter,
@@ -662,7 +686,7 @@ async def get_public_device_alerts(
 ):
     """Authenticated alert history alias kept for backward compatibility."""
     logger.warning("Deprecated public device alerts endpoint used for device=%s", device_id)
-    await ensure_device_view_access(current_user, device_id)
+    await require_device_read_access(current_user, device_id)
     items = await db.get_alerts_by_device(
         device_id=device_id,
         severity=severity,
@@ -691,7 +715,7 @@ async def cancel_device_command(
     current_user: dict = Depends(require_current_user),
 ):
     """Cancel a queued or in-flight command."""
-    await ensure_device_manage_access(current_user, device_id)
+    await require_device_owner(current_user, device_id)
     success = await db.cancel_device_command(device_id, command_id, "Cancelled by device owner")
     if not success:
         raise HTTPException(status_code=404, detail="Command not found or already finished")

@@ -1,5 +1,5 @@
 """
-User data models.
+User account models.
 """
 from datetime import date, datetime
 from typing import Optional, List, Dict, Literal
@@ -16,7 +16,7 @@ class EmergencyContact(BaseModel):
 
 
 class HealthProfile(BaseModel):
-    """Patient health profile."""
+    """Optional health context stored on a user account."""
     conditions: List[str] = Field(default_factory=list, description="Medical conditions")
     medications: List[str] = Field(default_factory=list)
     allergies: List[str] = Field(default_factory=list)
@@ -24,7 +24,7 @@ class HealthProfile(BaseModel):
 
 
 class AlertThresholds(BaseModel):
-    """Custom alert thresholds for a user."""
+    """Alert-threshold overrides reusable for one device."""
     # SpO2
     spo2_low: Optional[float] = 90.0
     spo2_critical: Optional[float] = 85.0
@@ -46,12 +46,12 @@ class AlertThresholds(BaseModel):
 
 
 class User(BaseModel):
-    """System user with an internal metadata role."""
+    """User account with identity and authentication fields."""
     user_id: str
     name: str
     age: Optional[int] = None
     gender: Optional[str] = None
-    role: UserRole = Field(..., description="Internal metadata role, not device authorization")
+    role: UserRole = Field(..., description="Internal system role only, not product authorization")
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     phone_number: Optional[str] = None
@@ -61,14 +61,14 @@ class User(BaseModel):
     # Health profile (optional)
     health_profile: Optional[HealthProfile] = None
     
-    # Custom thresholds
+    # Legacy user-scoped thresholds kept only for backward compatibility.
     alert_thresholds: Optional[AlertThresholds] = None
     
     # Associated devices
     devices: List[str] = Field(default_factory=list)
     
-    # Legacy caregiver mapping retained for backward compatibility with older records.
-    caregivers: List[str] = Field(default_factory=list, description="Caregiver user IDs")
+    # Legacy sharing field retained for backward compatibility with older records.
+    caregivers: List[str] = Field(default_factory=list, description="Deprecated legacy sharing field")
     
     created_at: Optional[datetime] = None
 

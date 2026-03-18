@@ -1,5 +1,5 @@
 """
-User management REST API endpoints.
+User account REST API endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 from ..db import db
@@ -72,31 +72,12 @@ async def get_user(user_id: str, current_user: dict = Depends(require_current_us
 async def update_thresholds(
     user_id: str,
     thresholds: ThresholdsUpdate,
-    request: Request,
     current_user: dict = Depends(require_current_user),
 ):
-    """Update user's alert thresholds."""
+    """Deprecated user-scoped thresholds endpoint."""
+    _ = thresholds
     await ensure_user_access(current_user, user_id)
-    # Only include non-None values
-    threshold_dict = {k: v for k, v in thresholds.model_dump().items() if v is not None}
-    
-    if not threshold_dict:
-        raise HTTPException(status_code=400, detail="No thresholds provided")
-    
-    success = await db.update_user_thresholds(user_id, threshold_dict)
-    
-    if not success:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    await db.insert_audit_log(
-        {
-            "action": "user.thresholds.update",
-            "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
-            "target_id": user_id,
-            "request_id": request.state.request_id,
-            "details": {"updated_fields": sorted(threshold_dict.keys())},
-        }
+    raise HTTPException(
+        status_code=410,
+        detail="Threshold settings are device-scoped. Use /api/v1/devices/{device_id}/thresholds.",
     )
-    
-    return {"status": "success", "user_id": user_id, "updated_thresholds": threshold_dict}

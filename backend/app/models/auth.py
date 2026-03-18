@@ -1,5 +1,5 @@
 """
-Authentication and authorization models.
+Authentication models for end-user sessions and internal admin access.
 """
 from datetime import date, datetime
 from typing import List, Optional
@@ -30,8 +30,6 @@ class TokenResponse(BaseModel):
     refresh_expires_at: datetime
     session_id: str
     user_id: str
-    role: str
-    scopes: List[str] = Field(default_factory=list)
 
 
 class RefreshRequest(BaseModel):
@@ -48,11 +46,12 @@ class LogoutResponse(BaseModel):
 class AuthenticatedUser(BaseModel):
     """Minimal identity shape used by route authorization."""
     user_id: str
-    role: str
     auth_type: str = "jwt"
     session_id: str
     caregivers: List[str] = Field(default_factory=list)
     is_active: bool = True
+    is_system_admin: bool = False
+    role: Optional[str] = Field(default=None, description="Internal system role only.")
     email: Optional[str] = None
     phone_number: Optional[str] = None
     date_of_birth: Optional[str] = None

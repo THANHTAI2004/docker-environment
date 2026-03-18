@@ -130,6 +130,7 @@ class Database:
             # Devices
             await self.devices.create_index([("device_id", 1)], unique=True)
             await self.devices.create_index([("status", 1)])
+            await self.devices.create_index([("owner_user_id", 1)], sparse=True)
             await self.devices.create_index([("esp_token_hash", 1)], unique=True, sparse=True)
 
             # Users
@@ -157,15 +158,10 @@ class Database:
 
             # User-device links
             await self.device_links.create_index([("device_id", 1), ("user_id", 1)], unique=True)
-            await self.device_links.create_index([("user_id", 1), ("linked_at", -1)])
-            await self.device_links.create_index([("device_id", 1), ("linked_at", -1)])
-            await self.device_links.create_index([("device_id", 1), ("link_role", 1)])
-            normalized_links = await self.device_links.update_many(
-                {"link_role": "caregiver"},
-                {"$set": {"link_role": "viewer", "updated_at": datetime.utcnow()}},
-            )
-            if normalized_links.modified_count > 0:
-                logger.info("Normalized %s legacy device-view links to viewer", normalized_links.modified_count)
+            await self.device_links.create_index([("user_id", 1), ("is_active", 1), ("created_at", -1)])
+            await self.device_links.create_index([("device_id", 1), ("is_active", 1), ("created_at", -1)])
+            await self.device_links.create_index([("device_id", 1), ("permission", 1), ("is_active", 1)])
+            await self._normalize_existing_device_links()
 
             # Auth sessions
             await self.auth_sessions.create_index([("session_id", 1)], unique=True)
@@ -214,42 +210,151 @@ class Database:
         output.pop("password_hash", None)
         return output
 
-    def _normalize_link_role(self, link_role: Optional[str]) -> Optional[str]:
-        """Map legacy link-role aliases to the canonical owner/viewer model."""
-        if link_role == "caregiver":
+    def _normalize_device_permission(self, permission: Optional[str]) -> Optional[str]:
+        """Map legacy permission aliases to the canonical owner/viewer model."""
+        if permission == "caregiver":
             return "viewer"
-        return link_role
+        return permission
+
+    def _normalize_link_role(self, link_role: Optional[str]) -> Optional[str]:
+        """Backward-compatible alias for permission normalization."""
+        return self._normalize_device_permission(link_role)
 
     def _normalize_device_link(self, doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Normalize one serialized device-link document."""
         if not doc:
             return None
         normalized = dict(doc)
-        normalized["link_role"] = self._normalize_link_role(normalized.get("link_role"))
+        permission = self._normalize_device_permission(
+            normalized.get("permission") or normalized.get("link_role")
+        )
+        created_at = normalized.get("created_at") or normalized.get("linked_at")
+        added_by_user_id = normalized.get("added_by_user_id") or normalized.get("linked_by")
+        revoked_at = normalized.get("revoked_at")
+        is_active = normalized.get("is_active")
+        if is_active is None:
+            is_active = revoked_at is None
+
+        normalized["permission"] = permission
+        normalized["added_by_user_id"] = added_by_user_id
+        normalized["created_at"] = created_at
+        normalized["revoked_at"] = revoked_at
+        normalized["is_active"] = bool(is_active)
+
+        # Legacy aliases kept temporarily for older clients/tests.
+        normalized["link_role"] = permission
+        normalized["linked_by"] = added_by_user_id
+        normalized["linked_at"] = created_at
         return normalized
 
-    def _expand_link_roles(self, link_roles: Optional[List[str]]) -> Optional[List[str]]:
-        """Expand canonical link-role filters so legacy viewer aliases still match."""
-        if not link_roles:
+    def _expand_permissions(self, permissions: Optional[List[str]]) -> Optional[List[str]]:
+        """Expand canonical permission filters so legacy viewer aliases still match."""
+        if not permissions:
             return None
 
         expanded: List[str] = []
-        for link_role in link_roles:
-            normalized = self._normalize_link_role(link_role)
+        for permission in permissions:
+            normalized = self._normalize_device_permission(permission)
             if normalized == "viewer":
                 expanded.extend(["viewer", "caregiver"])
             elif normalized:
                 expanded.append(normalized)
 
         deduped: List[str] = []
-        for link_role in expanded:
-            if link_role not in deduped:
-                deduped.append(link_role)
+        for permission in expanded:
+            if permission not in deduped:
+                deduped.append(permission)
         return deduped
 
     def _device_link_sort_key(self, item: Dict[str, Any]) -> tuple[int, str]:
-        """Sort owner links before viewer links, then by link time."""
-        return (0 if item.get("link_role") == "owner" else 1, item.get("linked_at") or "")
+        """Sort owner permissions before viewer permissions, then by creation time."""
+        permission = item.get("permission") or item.get("link_role")
+        return (0 if permission == "owner" else 1, item.get("created_at") or item.get("linked_at") or "")
+
+    def _active_device_link_filter(self) -> Dict[str, Any]:
+        """Match currently active device links across new and legacy records."""
+        return {
+            "$or": [
+                {"is_active": True},
+                {
+                    "$and": [
+                        {"is_active": {"$exists": False}},
+                        {
+                            "$or": [
+                                {"revoked_at": {"$exists": False}},
+                                {"revoked_at": None},
+                            ]
+                        },
+                    ]
+                },
+            ]
+        }
+
+    def _active_device_link_query(self, query: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Combine a device-link query with the active-link predicate."""
+        active_filter = self._active_device_link_filter()
+        if not query:
+            return active_filter
+        return {"$and": [query, active_filter]}
+
+    async def _normalize_existing_device_links(self) -> None:
+        """Backfill canonical permission fields on existing device-link documents."""
+        if self.device_links is None:
+            return
+
+        normalized_count = 0
+        async for doc in self.device_links.find({}):
+            updates: Dict[str, Any] = {}
+            permission = self._normalize_device_permission(doc.get("permission") or doc.get("link_role"))
+            created_at = doc.get("created_at") or doc.get("linked_at")
+            added_by_user_id = doc.get("added_by_user_id") or doc.get("linked_by")
+            is_active = doc.get("is_active")
+            if is_active is None:
+                is_active = doc.get("revoked_at") is None
+
+            if permission and doc.get("permission") != permission:
+                updates["permission"] = permission
+            if permission and doc.get("link_role") != permission:
+                updates["link_role"] = permission
+            if created_at is not None and doc.get("created_at") != created_at:
+                updates["created_at"] = created_at
+            if created_at is not None and doc.get("linked_at") != created_at:
+                updates["linked_at"] = created_at
+            if added_by_user_id is not None and doc.get("added_by_user_id") != added_by_user_id:
+                updates["added_by_user_id"] = added_by_user_id
+            if added_by_user_id is not None and doc.get("linked_by") != added_by_user_id:
+                updates["linked_by"] = added_by_user_id
+            if doc.get("is_active") != bool(is_active):
+                updates["is_active"] = bool(is_active)
+
+            if updates:
+                await self.device_links.update_one({"_id": doc["_id"]}, {"$set": updates})
+                normalized_count += 1
+
+        if normalized_count > 0:
+            logger.info("Normalized %s device-link documents to canonical permission fields", normalized_count)
+
+        device_ids = await self.device_links.distinct("device_id")
+        for device_id in device_ids:
+            await self._sync_device_owner_cache(device_id)
+
+    async def _sync_device_owner_cache(self, device_id: str) -> None:
+        """Cache the active owner user ID on the device document for fast lookups."""
+        if self.devices is None:
+            return
+
+        owner_link = await self.get_device_owner_link(device_id)
+        if owner_link and owner_link.get("user_id"):
+            await self.devices.update_one(
+                {"device_id": device_id},
+                {"$set": {"owner_user_id": owner_link["user_id"]}},
+            )
+            return
+
+        await self.devices.update_one(
+            {"device_id": device_id},
+            {"$unset": {"owner_user_id": ""}},
+        )
 
     def _make_command_dedupe_key(self, payload: Dict[str, Any]) -> str:
         """Create a stable dedupe key for logically identical commands."""
@@ -323,7 +428,7 @@ class Database:
             return []
 
         try:
-            accessible_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner", "viewer"])
+            accessible_device_ids = await self.get_device_ids_for_user(user_id, permissions=["owner", "viewer"])
             if device_id:
                 if device_id not in accessible_device_ids:
                     return []
@@ -421,7 +526,7 @@ class Database:
         if self.health_readings is None:
             return None
         try:
-            accessible_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner", "viewer"])
+            accessible_device_ids = await self.get_device_ids_for_user(user_id, permissions=["owner", "viewer"])
             if device_id:
                 if device_id not in accessible_device_ids:
                     return None
@@ -452,7 +557,7 @@ class Database:
         if self.health_readings is None:
             return []
         try:
-            accessible_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner", "viewer"])
+            accessible_device_ids = await self.get_device_ids_for_user(user_id, permissions=["owner", "viewer"])
             if not accessible_device_ids:
                 return []
             query: Dict[str, Any] = {
@@ -538,7 +643,7 @@ class Database:
         if self.alerts is None:
             return []
         try:
-            accessible_device_ids = await self.get_device_ids_for_user(user_id, link_roles=["owner", "viewer"])
+            accessible_device_ids = await self.get_device_ids_for_user(user_id, permissions=["owner", "viewer"])
             query: Dict[str, Any] = {
                 "$or": [
                     {"recipient_user_ids": user_id},
@@ -615,6 +720,12 @@ class Database:
             device_id = doc["device_id"]
             doc.setdefault("status", "active")
             doc.setdefault("device_name", device_id)
+            if doc.get("settings") is None and doc.get("alert_thresholds") is not None:
+                doc["settings"] = {"alert_thresholds": doc["alert_thresholds"]}
+            elif isinstance(doc.get("settings"), dict) and doc.get("alert_thresholds") is None:
+                alert_thresholds = doc["settings"].get("alert_thresholds")
+                if alert_thresholds is not None:
+                    doc["alert_thresholds"] = alert_thresholds
             doc["last_seen"] = now
 
             result = await self.devices.update_one(
@@ -722,7 +833,13 @@ class Database:
         try:
             result = await self.devices.update_one(
                 {"device_id": device_id},
-                {"$set": {"alert_thresholds": thresholds, "last_seen": datetime.utcnow()}},
+                {
+                    "$set": {
+                        "settings.alert_thresholds": thresholds,
+                        "alert_thresholds": thresholds,
+                        "last_seen": datetime.utcnow(),
+                    }
+                },
             )
             return result.matched_count > 0
         except Exception as exc:
@@ -736,7 +853,9 @@ class Database:
         if self.device_links is None:
             return None
         try:
-            doc = await self.device_links.find_one({"device_id": device_id, "user_id": user_id})
+            doc = await self.device_links.find_one(
+                self._active_device_link_query({"device_id": device_id, "user_id": user_id})
+            )
             return self._normalize_device_link(self._serialize_doc(doc)) if doc else None
         except Exception as exc:
             logger.error("Device link query error: %s", exc)
@@ -747,7 +866,17 @@ class Database:
         if self.device_links is None:
             return None
         try:
-            doc = await self.device_links.find_one({"device_id": device_id, "link_role": "owner"})
+            doc = await self.device_links.find_one(
+                self._active_device_link_query(
+                    {
+                        "device_id": device_id,
+                        "$or": [
+                            {"permission": {"$in": self._expand_permissions(["owner"]) or ["owner"]}},
+                            {"link_role": {"$in": self._expand_permissions(["owner"]) or ["owner"]}},
+                        ],
+                    }
+                )
+            )
             return self._normalize_device_link(self._serialize_doc(doc)) if doc else None
         except Exception as exc:
             logger.error("Device owner link query error: %s", exc)
@@ -760,7 +889,9 @@ class Database:
         try:
             links = [
                 self._normalize_device_link(self._serialize_doc(doc))
-                async for doc in self.device_links.find({"device_id": device_id})
+                async for doc in self.device_links.find(
+                    self._active_device_link_query({"device_id": device_id})
+                )
             ]
             links.sort(key=self._device_link_sort_key)
             return links
@@ -778,9 +909,18 @@ class Database:
         if self.device_links is None:
             return None
         try:
-            expanded_roles = self._expand_link_roles([link_role]) or [link_role]
+            expanded_roles = self._expand_permissions([link_role]) or [link_role]
             doc = await self.device_links.find_one(
-                {"device_id": device_id, "user_id": user_id, "link_role": {"$in": expanded_roles}}
+                self._active_device_link_query(
+                    {
+                        "device_id": device_id,
+                        "user_id": user_id,
+                        "$or": [
+                            {"permission": {"$in": expanded_roles}},
+                            {"link_role": {"$in": expanded_roles}},
+                        ],
+                    }
+                )
             )
             return self._normalize_device_link(self._serialize_doc(doc)) if doc else None
         except Exception as exc:
@@ -794,7 +934,9 @@ class Database:
         try:
             return [
                 self._normalize_device_link(self._serialize_doc(doc))
-                async for doc in self.device_links.find({"user_id": user_id})
+                async for doc in self.device_links.find(
+                    self._active_device_link_query({"user_id": user_id})
+                )
             ]
         except Exception as exc:
             logger.error("User device links query error: %s", exc)
@@ -803,17 +945,20 @@ class Database:
     async def get_device_ids_for_user(
         self,
         user_id: str,
-        link_roles: Optional[List[str]] = None,
+        permissions: Optional[List[str]] = None,
     ) -> List[str]:
-        """Return linked device IDs for one user, optionally filtered by link role."""
+        """Return linked device IDs for one user, optionally filtered by permission."""
         if self.device_links is None:
             return []
         try:
             query: Dict[str, Any] = {"user_id": user_id}
-            expanded_roles = self._expand_link_roles(link_roles)
+            expanded_roles = self._expand_permissions(permissions)
             if expanded_roles:
-                query["link_role"] = {"$in": expanded_roles}
-            links = [doc async for doc in self.device_links.find(query)]
+                query["$or"] = [
+                    {"permission": {"$in": expanded_roles}},
+                    {"link_role": {"$in": expanded_roles}},
+                ]
+            links = [doc async for doc in self.device_links.find(self._active_device_link_query(query))]
             return [doc["device_id"] for doc in links if doc.get("device_id")]
         except Exception as exc:
             logger.error("Device IDs for user query error: %s", exc)
@@ -833,46 +978,59 @@ class Database:
         return [
             link["user_id"]
             for link in links
-            if link.get("link_role") in {"owner", "viewer"} and link.get("user_id")
+            if link.get("permission") in {"owner", "viewer"} and link.get("user_id")
         ]
 
     async def upsert_device_link(
         self,
         device_id: str,
         user_id: str,
-        link_role: str,
-        linked_by: Optional[str],
+        permission: str,
+        added_by_user_id: Optional[str],
     ) -> str:
         """Create or update one user-device link."""
         if self.device_links is None:
             return "error"
         try:
             now = datetime.utcnow()
-            link_role = self._normalize_link_role(link_role) or link_role
+            permission = self._normalize_device_permission(permission) or permission
             existing = await self.device_links.find_one({"device_id": device_id, "user_id": user_id})
             if existing:
                 await self.device_links.update_one(
                     {"_id": existing["_id"]},
                     {
                         "$set": {
-                            "link_role": link_role,
-                            "linked_by": linked_by,
+                            "permission": permission,
+                            "link_role": permission,
+                            "added_by_user_id": added_by_user_id,
+                            "linked_by": added_by_user_id,
+                            "created_at": existing.get("created_at") or existing.get("linked_at") or now,
+                            "linked_at": existing.get("created_at") or existing.get("linked_at") or now,
+                            "is_active": True,
+                            "revoked_at": None,
                             "updated_at": now,
                         }
                     },
                 )
+                await self._sync_device_owner_cache(device_id)
                 return "updated"
 
             await self.device_links.insert_one(
                 {
                     "device_id": device_id,
                     "user_id": user_id,
-                    "link_role": link_role,
+                    "permission": permission,
+                    "link_role": permission,
+                    "created_at": now,
                     "linked_at": now,
-                    "linked_by": linked_by,
+                    "added_by_user_id": added_by_user_id,
+                    "linked_by": added_by_user_id,
+                    "is_active": True,
+                    "revoked_at": None,
                     "updated_at": now,
                 }
             )
+            await self._sync_device_owner_cache(device_id)
             return "linked"
         except DuplicateKeyError:
             return "updated"
@@ -881,12 +1039,24 @@ class Database:
             return "error"
 
     async def delete_device_link(self, device_id: str, user_id: str) -> bool:
-        """Delete one user-device link."""
+        """Soft-revoke one user-device link."""
         if self.device_links is None:
             return False
         try:
-            result = await self.device_links.delete_one({"device_id": device_id, "user_id": user_id})
-            return result.deleted_count > 0
+            existing = await self.get_device_link(device_id, user_id)
+            result = await self.device_links.update_one(
+                self._active_device_link_query({"device_id": device_id, "user_id": user_id}),
+                {
+                    "$set": {
+                        "is_active": False,
+                        "revoked_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow(),
+                    }
+                },
+            )
+            if result.modified_count > 0:
+                await self._sync_device_owner_cache(device_id)
+            return result.modified_count > 0
         except Exception as exc:
             logger.error("Device link delete error: %s", exc)
             return False
@@ -898,7 +1068,9 @@ class Database:
         try:
             links = [
                 self._normalize_device_link(self._serialize_doc(doc))
-                async for doc in self.device_links.find({"user_id": user_id}).sort("linked_at", -1)
+                async for doc in self.device_links.find(
+                    self._active_device_link_query({"user_id": user_id})
+                ).sort("created_at", -1)
             ]
             if not links:
                 return []
@@ -910,8 +1082,10 @@ class Database:
             }
             device_links = [
                 self._normalize_device_link(self._serialize_doc(doc))
-                async for doc in self.device_links.find({"device_id": {"$in": device_ids}}).sort(
-                    [("link_role", 1), ("linked_at", 1)]
+                async for doc in self.device_links.find(
+                    self._active_device_link_query({"device_id": {"$in": device_ids}})
+                ).sort(
+                    [("permission", 1), ("created_at", 1)]
                 )
             ]
             linked_user_ids = list({link["user_id"] for link in device_links})
@@ -929,11 +1103,14 @@ class Database:
                         "user_id": linked_user.get("user_id"),
                         "name": linked_user.get("name"),
                         "phone_number": linked_user.get("phone_number") or linked_user.get("phone"),
-                        "link_role": device_link.get("link_role"),
+                        "permission": device_link.get("permission"),
+                        "link_role": device_link.get("permission"),
                     }
                 )
             for linked_items in linked_users_by_device.values():
-                linked_items.sort(key=lambda item: (0 if item.get("link_role") == "owner" else 1, item.get("user_id") or ""))
+                linked_items.sort(
+                    key=lambda item: (0 if item.get("permission") == "owner" else 1, item.get("user_id") or "")
+                )
 
             results: List[Dict[str, Any]] = []
             for link in links:
@@ -949,9 +1126,19 @@ class Database:
                         "registered_at": device.get("registered_at"),
                         "last_seen": device.get("last_seen"),
                         "status": device.get("status"),
-                        "link_role": link.get("link_role"),
-                        "linked_at": link.get("linked_at"),
-                        "linked_by": link.get("linked_by"),
+                        "owner_user_id": device.get("owner_user_id"),
+                        "permission": link.get("permission"),
+                        "link_role": link.get("permission"),
+                        "created_at": link.get("created_at"),
+                        "linked_at": link.get("created_at"),
+                        "added_by_user_id": link.get("added_by_user_id"),
+                        "linked_by": link.get("added_by_user_id"),
+                        "is_active": link.get("is_active"),
+                        "settings": device.get("settings") or (
+                            {"alert_thresholds": device.get("alert_thresholds")}
+                            if device.get("alert_thresholds")
+                            else None
+                        ),
                         "linked_users": linked_users_by_device.get(link["device_id"], []),
                     }
                 )
@@ -967,8 +1154,10 @@ class Database:
         try:
             links = [
                 self._normalize_device_link(self._serialize_doc(doc))
-                async for doc in self.device_links.find({"device_id": device_id}).sort(
-                    [("link_role", 1), ("linked_at", 1)]
+                async for doc in self.device_links.find(
+                    self._active_device_link_query({"device_id": device_id})
+                ).sort(
+                    [("permission", 1), ("created_at", 1)]
                 )
             ]
             if not links:
@@ -990,12 +1179,16 @@ class Database:
                         "user_id": user.get("user_id"),
                         "name": user.get("name"),
                         "phone_number": user.get("phone_number") or user.get("phone"),
-                        "link_role": link.get("link_role"),
-                        "linked_at": link.get("linked_at"),
-                        "linked_by": link.get("linked_by"),
+                        "permission": link.get("permission"),
+                        "link_role": link.get("permission"),
+                        "created_at": link.get("created_at"),
+                        "linked_at": link.get("created_at"),
+                        "added_by_user_id": link.get("added_by_user_id"),
+                        "linked_by": link.get("added_by_user_id"),
+                        "is_active": link.get("is_active"),
                     }
                 )
-            results.sort(key=lambda item: (0 if item.get("link_role") == "owner" else 1, item.get("linked_at") or ""))
+            results.sort(key=lambda item: (0 if item.get("permission") == "owner" else 1, item.get("created_at") or ""))
             return results
         except Exception as exc:
             logger.error("List users for device error: %s", exc)
@@ -1449,6 +1642,7 @@ class Database:
             now = datetime.utcnow()
             payload.setdefault("created_at", now)
             payload.setdefault("last_refreshed_at", now)
+            payload.pop("role", None)
             await self.auth_sessions.insert_one(payload)
             return True
         except DuplicateKeyError:

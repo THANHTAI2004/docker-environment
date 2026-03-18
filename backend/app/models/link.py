@@ -4,7 +4,7 @@ User-device link models.
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 def _normalize_link_role(value: str) -> str:
@@ -18,12 +18,23 @@ class DeviceLink(BaseModel):
     """One relationship between a user account and a device."""
     device_id: str
     user_id: str
-    link_role: Literal["owner", "viewer"] = Field(default="viewer")
-    linked_at: Optional[datetime] = None
-    linked_by: Optional[str] = None
+    permission: Literal["owner", "viewer"] = Field(
+        default="viewer",
+        validation_alias=AliasChoices("permission", "link_role"),
+    )
+    added_by_user_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("added_by_user_id", "linked_by"),
+    )
+    created_at: Optional[datetime] = Field(
+        default=None,
+        validation_alias=AliasChoices("created_at", "linked_at"),
+    )
+    revoked_at: Optional[datetime] = None
+    is_active: bool = True
     updated_at: Optional[datetime] = None
 
-    @field_validator("link_role", mode="before")
+    @field_validator("permission", mode="before")
     @classmethod
     def normalize_link_role(cls, value: str) -> str:
         return _normalize_link_role(value)
@@ -39,9 +50,12 @@ class DeviceLinkDB(DeviceLink):
 class DeviceLinkRequest(BaseModel):
     """Request payload to link a user to a device."""
     user_id: Optional[str] = None
-    link_role: Literal["owner", "viewer", "caregiver"] = Field(default="viewer")
+    permission: Literal["owner", "viewer", "caregiver"] = Field(
+        default="viewer",
+        validation_alias=AliasChoices("permission", "link_role"),
+    )
 
-    @field_validator("link_role", mode="before")
+    @field_validator("permission", mode="before")
     @classmethod
     def normalize_link_role(cls, value: str) -> str:
         return _normalize_link_role(value)

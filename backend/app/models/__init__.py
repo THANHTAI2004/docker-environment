@@ -3,7 +3,7 @@ Data models for wearable health monitoring system.
 """
 from .health import HealthReading, HealthReadingDB, ECGData, LocationData
 from .alert import Alert, AlertDB, AlertAcknowledge
-from .device import Device, DeviceDB, DeviceRegistration, ECGRequestCommand, ESPCommandAck
+from .device import Device, DeviceDB, DeviceRegistration, DeviceSettings, ECGRequestCommand, ESPCommandAck
 from .link import DeviceCaregiverRequest, DeviceLink, DeviceLinkDB, DeviceLinkRequest, DeviceViewerRequest
 from .user import User, UserDB, UserCreate, ThresholdsUpdate, AlertThresholds
 from .auth import (
@@ -26,6 +26,7 @@ __all__ = [
     "Device",
     "DeviceDB",
     "DeviceRegistration",
+    "DeviceSettings",
     "ECGRequestCommand",
     "ESPCommandAck",
     "DeviceLink",

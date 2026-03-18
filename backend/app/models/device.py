@@ -15,6 +15,13 @@ class DeviceMetadata(BaseModel):
     serial_number: Optional[str] = None
 
 
+class DeviceSettings(BaseModel):
+    """Owner-managed device settings."""
+    model_config = ConfigDict(extra="allow")
+
+    alert_thresholds: Optional[AlertThresholds] = None
+
+
 class Device(BaseModel):
     """Wearable device."""
     device_id: str
@@ -24,7 +31,9 @@ class Device(BaseModel):
     registered_at: Optional[datetime] = None
     last_seen: Optional[datetime] = None
     status: str = Field(default="active", description="active, inactive, maintenance")
+    owner_user_id: Optional[str] = None
     metadata: Optional[DeviceMetadata] = None
+    settings: Optional[DeviceSettings] = None
     alert_thresholds: Optional[AlertThresholds] = None
 
 
@@ -42,6 +51,7 @@ class DeviceRegistration(BaseModel):
     device_name: Optional[str] = None
     firmware_version: Optional[str] = None
     metadata: Optional[DeviceMetadata] = None
+    settings: Optional[DeviceSettings] = None
     alert_thresholds: Optional[AlertThresholds] = None
 
 
