@@ -52,7 +52,6 @@ async def register(payload: RegisterRequest, request: Request):
             "phone_number": normalized_phone,
             "date_of_birth": payload.date_of_birth.isoformat(),
             "password_hash": hash_password(payload.password),
-            "role": "user",
             "is_active": True,
         }
     )
@@ -65,7 +64,7 @@ async def register(payload: RegisterRequest, request: Request):
         {
             "action": "auth.register",
             "actor_id": user_id,
-            "actor_role": "user",
+            "actor_role": None,
             "target_id": user_id,
             "request_id": request.state.request_id,
         }
@@ -97,7 +96,7 @@ async def login(payload: PhoneLoginRequest, request: Request):
         {
             "action": "auth.login",
             "actor_id": user["user_id"],
-            "actor_role": user["role"],
+            "actor_role": user.get("role"),
             "target_id": tokens["session_id"],
             "request_id": request.state.request_id,
         }
@@ -114,7 +113,7 @@ async def refresh_tokens(payload: RefreshRequest, request: Request):
         {
             "action": "auth.refresh",
             "actor_id": tokens["user_id"],
-            "actor_role": user.get("role", "user") if user else "user",
+            "actor_role": user.get("role") if user else None,
             "target_id": tokens["session_id"],
             "request_id": request.state.request_id,
         }
@@ -142,7 +141,7 @@ async def logout(request: Request, current_user: dict = Depends(require_current_
         {
             "action": "auth.logout",
             "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
+            "actor_role": current_user.get("role"),
             "target_id": session_id,
             "request_id": request.state.request_id,
         }

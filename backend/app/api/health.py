@@ -13,7 +13,7 @@ from ..utils.auth import require_admin_principal, require_current_user
 router = APIRouter(prefix="/api/v1", tags=["health"])
 
 
-@router.get("/users/{user_id}/vitals")
+@router.get("/users/{user_id}/vitals", deprecated=True)
 async def get_vitals(
     user_id: str,
     device_id: Optional[str] = None,
@@ -39,7 +39,7 @@ async def get_vitals(
     }
 
 
-@router.get("/users/{user_id}/latest")
+@router.get("/users/{user_id}/latest", deprecated=True)
 async def get_latest_user_vitals(
     user_id: str,
     device_id: Optional[str] = None,
@@ -53,7 +53,7 @@ async def get_latest_user_vitals(
     return item
 
 
-@router.get("/users/{user_id}/ecg")
+@router.get("/users/{user_id}/ecg", deprecated=True)
 async def get_ecg(
     user_id: str,
     quality_filter: Optional[str] = Query(None, pattern="^(good|fair|poor)$"),
@@ -75,7 +75,7 @@ async def get_ecg(
     }
 
 
-@router.get("/users/{user_id}/summary")
+@router.get("/users/{user_id}/summary", deprecated=True)
 async def get_summary(
     user_id: str,
     period: str = Query(default="24h", pattern="^(1h|6h|24h|7d|30d)$"),

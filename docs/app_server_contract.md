@@ -11,7 +11,9 @@ Claim an unowned device for the current authenticated user.
 Request body:
 
 ```json
-{}
+{
+  "pairing_code": "8H4K7Q2M"
+}
 ```
 
 Response body:
@@ -21,6 +23,7 @@ Response body:
   "status": "claimed",
   "device_id": "dev-001",
   "user_id": "user-001",
+  "permission": "owner",
   "link_role": "owner"
 }
 ```
@@ -29,7 +32,8 @@ Error codes:
 
 - `401 Unauthorized`: missing or invalid bearer token
 - `404 Not Found`: device does not exist
-- `409 Conflict`: device already has an owner
+- `403 Forbidden`: invalid pairing code
+- `409 Conflict`: device already has an owner or is missing a configured pairing code
 - `500 Internal Server Error`: claim write failed
 
 ## `POST /api/v1/devices/{device_id}/viewers`
@@ -51,6 +55,7 @@ Response body:
   "status": "linked",
   "device_id": "dev-001",
   "user_id": "user-002",
+  "permission": "viewer",
   "link_role": "viewer"
 }
 ```
@@ -111,6 +116,7 @@ Response body:
       "registered_at": "2026-03-17T10:00:00Z",
       "last_seen": "2026-03-17T10:05:00Z",
       "status": "active",
+      "permission": "owner",
       "link_role": "owner",
       "linked_at": "2026-03-17T10:01:00Z",
       "linked_by": "user-001",
@@ -119,12 +125,14 @@ Response body:
           "user_id": "user-001",
           "name": "User A",
           "phone_number": "+84900000001",
+          "permission": "owner",
           "link_role": "owner"
         },
         {
           "user_id": "user-002",
           "name": "User B",
           "phone_number": "+84900000002",
+          "permission": "viewer",
           "link_role": "viewer"
         }
       ]
@@ -156,12 +164,14 @@ Response body:
       "user_id": "user-001",
       "name": "User A",
       "phone_number": "+84900000001",
+      "permission": "owner",
       "link_role": "owner"
     },
     {
       "user_id": "user-002",
       "name": "User B",
       "phone_number": "+84900000002",
+      "permission": "viewer",
       "link_role": "viewer"
     }
   ]

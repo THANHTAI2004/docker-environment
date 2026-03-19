@@ -57,7 +57,7 @@ async def get_device_alerts(
     }
 
 
-@router.get("/users/{user_id}/alerts")
+@router.get("/users/{user_id}/alerts", deprecated=True)
 async def get_alerts(
     user_id: str,
     severity: Optional[str] = Query(None, pattern="^(info|warning|critical)$"),
@@ -103,7 +103,7 @@ async def acknowledge_alert(
         {
             "action": "alert.acknowledge",
             "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
+            "actor_role": current_user.get("role"),
             "target_id": alert_id,
             "request_id": request.state.request_id,
         }

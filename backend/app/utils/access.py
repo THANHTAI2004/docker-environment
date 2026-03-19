@@ -122,7 +122,7 @@ def filter_device_response(device: Dict[str, Any], principal: Dict[str, Any]) ->
         "settings": settings,
         "alert_thresholds": device.get("alert_thresholds"),
     }
-    if principal.get("role") == "admin":
+    if principal.get("is_system_admin"):
         if "metadata" in device:
             visible["metadata"] = device["metadata"]
     return visible

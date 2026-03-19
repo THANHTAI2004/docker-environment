@@ -374,6 +374,25 @@ def hash_device_token(token: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def normalize_pairing_code(pairing_code: str) -> str:
+    """Normalize a device pairing code before hashing or comparison."""
+    return pairing_code.strip().upper()
+
+
+def hash_pairing_code(pairing_code: str) -> str:
+    """Derive stable hash for device-claim pairing codes."""
+    normalized = normalize_pairing_code(pairing_code)
+    raw = f"{settings.device_token_secret}:pairing:{normalized}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def verify_pairing_code(pairing_code: str, expected_hash: str | None) -> bool:
+    """Constant-time pairing-code verification against the stored hash."""
+    if not expected_hash:
+        return False
+    return hmac.compare_digest(hash_pairing_code(pairing_code), expected_hash)
+
+
 async def require_device_token(device_id: str, x_device_token: str | None = Header(default=None)):
     """Validate ESP device token from request header."""
     if not x_device_token:

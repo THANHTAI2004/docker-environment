@@ -27,6 +27,7 @@ Device permissions are derived from `device_links` only.
       "registered_at": "2026-03-17T10:00:00Z",
       "last_seen": "2026-03-17T10:05:00Z",
       "status": "active",
+      "permission": "owner",
       "link_role": "owner",
       "linked_at": "2026-03-17T10:01:00Z",
       "linked_by": "user-001",
@@ -35,12 +36,14 @@ Device permissions are derived from `device_links` only.
           "user_id": "user-001",
           "name": "User A",
           "phone_number": "+84900000001",
+          "permission": "owner",
           "link_role": "owner"
         },
         {
           "user_id": "user-002",
           "name": "User B",
           "phone_number": "+84900000002",
+          "permission": "viewer",
           "link_role": "viewer"
         }
       ]
@@ -51,7 +54,8 @@ Device permissions are derived from `device_links` only.
 
 ## Field notes
 
-- `link_role` on each device is the current authenticated user's permission for that device.
-- `linked_users[].link_role` is the permission of each linked account on the same device.
-- Valid `link_role` values are only `owner` and `viewer`.
+- `permission` is the canonical field for device access in the new contract.
+- `link_role` is a temporary backward-compatible alias and will be removed later.
+- `linked_users[].permission` is the canonical permission of each linked account on the same device.
+- Valid permission values are only `owner` and `viewer`.
 - Apps should not derive device permissions from `user.role`.

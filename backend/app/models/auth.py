@@ -51,7 +51,7 @@ class AuthenticatedUser(BaseModel):
     caregivers: List[str] = Field(default_factory=list)
     is_active: bool = True
     is_system_admin: bool = False
-    role: Optional[str] = Field(default=None, description="Internal system role only.")
+    role: Optional[str] = Field(default=None, description="Internal system role for admin accounts only.")
     email: Optional[str] = None
     phone_number: Optional[str] = None
     date_of_birth: Optional[str] = None

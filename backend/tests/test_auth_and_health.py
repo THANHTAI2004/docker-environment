@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import pytest
 
-from app.utils.auth import hash_password
+from app.utils.auth import hash_pairing_code, hash_password
 
 
 def _make_phone_lookup(users):
@@ -118,10 +118,7 @@ async def test_login_with_phone_number_normalizes_and_returns_tokens(client, app
         "refresh_expires_at",
         "session_id",
         "user_id",
-        "role",
-        "scopes",
     }
-    assert isinstance(body["scopes"], list)
     assert body["user_id"] == "patient-001"
     assert body["token_type"] == "bearer"
 
@@ -167,7 +164,7 @@ async def test_register_creates_user_with_normalized_phone(client, app_module, m
     assert saved_user["name"] == "Dang Thanh Tai"
     assert saved_user["phone_number"] == "+84987654321"
     assert saved_user["date_of_birth"] == "2004-02-01"
-    assert saved_user["role"] == "user"
+    assert "role" not in saved_user
     assert saved_user["is_active"] is True
     assert saved_user["password_hash"] != "MatKhau123"
 
@@ -257,7 +254,7 @@ async def test_me_returns_extended_profile_fields(client, app_module, monkeypatc
 
     body = response.json()
     assert response.status_code == 200
-    assert {"user_id", "name", "phone_number", "date_of_birth", "role", "is_active"} <= set(body.keys())
+    assert {"user_id", "name", "phone_number", "date_of_birth", "is_active"} <= set(body.keys())
     assert isinstance(body["user_id"], str)
     assert isinstance(body["name"], str)
     assert isinstance(body["phone_number"], str)
@@ -265,7 +262,7 @@ async def test_me_returns_extended_profile_fields(client, app_module, monkeypatc
     assert body["user_id"] == "patient-001"
     assert body["phone_number"] == "+84987654321"
     assert body["date_of_birth"] == "2004-02-01"
-    assert body["role"] == "patient"
+    assert "role" not in body
     assert body["is_active"] is True
 
 
@@ -844,21 +841,30 @@ async def test_claim_device_assigns_owner_link(client, app_module, monkeypatch):
         return users.get(user_id)
 
     async def fake_get_device(device_id):
-        return {"device_id": device_id, "device_name": "Wristband 1", "device_type": "wrist"}
+        return {
+            "device_id": device_id,
+            "device_name": "Wristband 1",
+            "device_type": "wrist",
+            "pairing_code_hash": hash_pairing_code("PAIR-1234"),
+        }
 
     async def fake_get_device_owner_link(device_id):
         return None
 
-    async def fake_upsert_device_link(device_id, user_id, link_role, linked_by):
+    async def fake_upsert_device_link(device_id, user_id, permission, added_by_user_id):
         captured.update(
             {
                 "device_id": device_id,
                 "user_id": user_id,
-                "link_role": link_role,
-                "linked_by": linked_by,
+                "permission": permission,
+                "added_by_user_id": added_by_user_id,
             }
         )
         return "linked"
+
+    async def fake_clear_device_pairing_code(device_id):
+        captured["pairing_code_cleared_for"] = device_id
+        return True
 
     async def fake_insert_audit_log(doc):
         return True
@@ -868,6 +874,7 @@ async def test_claim_device_assigns_owner_link(client, app_module, monkeypatch):
     monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
     monkeypatch.setattr(app_module.db, "get_device_owner_link", fake_get_device_owner_link)
     monkeypatch.setattr(app_module.db, "upsert_device_link", fake_upsert_device_link)
+    monkeypatch.setattr(app_module.db, "clear_device_pairing_code", fake_clear_device_pairing_code)
     monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
 
     login = await client.post(
@@ -879,6 +886,7 @@ async def test_claim_device_assigns_owner_link(client, app_module, monkeypatch):
     response = await client.post(
         "/api/v1/devices/dev-001/claim",
         headers={"Authorization": f"Bearer {token}"},
+        json={"pairing_code": "PAIR-1234"},
     )
 
     assert login.status_code == 200
@@ -887,13 +895,15 @@ async def test_claim_device_assigns_owner_link(client, app_module, monkeypatch):
         "status": "claimed",
         "device_id": "dev-001",
         "user_id": "user-001",
+        "permission": "owner",
         "link_role": "owner",
     }
     assert captured == {
         "device_id": "dev-001",
         "user_id": "user-001",
-        "link_role": "owner",
-        "linked_by": "user-001",
+        "permission": "owner",
+        "added_by_user_id": "user-001",
+        "pairing_code_cleared_for": "dev-001",
     }
 
 
@@ -916,7 +926,12 @@ async def test_claim_device_returns_409_when_owner_exists(client, app_module, mo
         return users.get(user_id)
 
     async def fake_get_device(device_id):
-        return {"device_id": device_id, "device_name": "Wristband 1", "device_type": "wrist"}
+        return {
+            "device_id": device_id,
+            "device_name": "Wristband 1",
+            "device_type": "wrist",
+            "pairing_code_hash": hash_pairing_code("PAIR-1234"),
+        }
 
     async def fake_get_device_owner_link(device_id):
         return {"device_id": device_id, "user_id": "owner-001", "link_role": "owner"}
@@ -935,6 +950,7 @@ async def test_claim_device_returns_409_when_owner_exists(client, app_module, mo
     response = await client.post(
         "/api/v1/devices/dev-001/claim",
         headers={"Authorization": f"Bearer {token}"},
+        json={"pairing_code": "PAIR-1234"},
     )
 
     assert login.status_code == 200

@@ -10,17 +10,33 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 import uuid
 
 from ..db import db
-from ..models import DeviceCaregiverRequest, DeviceRegistration, DeviceViewerRequest, ECGRequestCommand, ThresholdsUpdate, DeviceLinkRequest
+from ..models import (
+    DeviceCaregiverRequest,
+    DeviceClaimRequest,
+    DeviceLinkRequest,
+    DeviceRegistration,
+    DeviceViewerRequest,
+    ECGRequestCommand,
+    ThresholdsUpdate,
+)
 from ..utils.access import (
     filter_device_response,
     require_device_owner,
     require_device_read_access,
 )
-from ..utils.auth import hash_device_token, require_current_user, require_admin_user
+from ..utils.auth import (
+    hash_device_token,
+    hash_pairing_code,
+    normalize_pairing_code,
+    require_admin_user,
+    require_current_user,
+    verify_pairing_code,
+)
 from ..config import settings
 
 router = APIRouter(prefix="/api/v1", tags=["devices"])
 logger = logging.getLogger(__name__)
+PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
 
 def _permission_of_link(link: Optional[dict]) -> Optional[str]:
@@ -28,6 +44,11 @@ def _permission_of_link(link: Optional[dict]) -> Optional[str]:
     if not link:
         return None
     return link.get("permission") or link.get("link_role")
+
+
+def _generate_pairing_code(length: int = 8) -> str:
+    """Generate a human-friendly device pairing code."""
+    return "".join(secrets.choice(PAIRING_CODE_ALPHABET) for _ in range(length))
 
 
 async def _link_device_viewer(
@@ -66,7 +87,7 @@ async def _link_device_viewer(
         {
             "action": action,
             "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
+            "actor_role": current_user.get("role"),
             "target_id": device_id,
             "request_id": request.state.request_id,
             "details": details,
@@ -112,7 +133,7 @@ async def _remove_device_viewer(
         {
             "action": action,
             "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
+            "actor_role": current_user.get("role"),
             "target_id": device_id,
             "request_id": request.state.request_id,
             "details": details,
@@ -128,7 +149,9 @@ async def register_device(
     principal: dict = Depends(require_admin_user),
 ):
     """Register or update one device."""
-    device_dict = device.model_dump(exclude_none=True)
+    pairing_code = normalize_pairing_code(device.pairing_code) if device.pairing_code else _generate_pairing_code()
+    device_dict = device.model_dump(exclude_none=True, exclude={"pairing_code"})
+    device_dict["pairing_code_hash"] = hash_pairing_code(pairing_code)
     success = await db.register_device(device_dict)
     if not success:
         raise HTTPException(status_code=400, detail="Device registration failed")
@@ -136,15 +159,16 @@ async def register_device(
         {
             "action": "device.register",
             "actor_id": principal["user_id"],
-            "actor_role": principal["role"],
+            "actor_role": principal.get("role"),
             "target_id": device.device_id,
             "request_id": request.state.request_id,
+            "details": {"pairing_code_rotated": True},
         }
     )
-    return {"status": "success", "device_id": device.device_id}
+    return {"status": "success", "device_id": device.device_id, "pairing_code": pairing_code}
 
 
-@router.post("/devices/{device_id}/links")
+@router.post("/devices/{device_id}/links", deprecated=True)
 async def link_device_to_user(
     device_id: str,
     payload: DeviceLinkRequest,
@@ -170,17 +194,22 @@ async def link_device_to_user(
 @router.post("/devices/{device_id}/claim")
 async def claim_device(
     device_id: str,
+    payload: DeviceClaimRequest,
     request: Request,
     current_user: dict = Depends(require_current_user),
 ):
-    """Claim a device as its owner when it has not been claimed yet."""
-    device = await db.get_device(device_id)
+    """Claim a device as its owner using the device pairing code."""
+    device = await db.get_device_internal(device_id)
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
     owner_link = await db.get_device_owner_link(device_id)
     if owner_link:
         raise HTTPException(status_code=409, detail="This device already has an owner")
+    if not device.get("pairing_code_hash"):
+        raise HTTPException(status_code=409, detail="Device pairing code is not configured")
+    if not verify_pairing_code(payload.pairing_code, device.get("pairing_code_hash")):
+        raise HTTPException(status_code=403, detail="Invalid pairing code")
 
     result = await db.upsert_device_link(
         device_id=device_id,
@@ -190,12 +219,14 @@ async def claim_device(
     )
     if result == "error":
         raise HTTPException(status_code=500, detail="Failed to claim device")
+    if not await db.clear_device_pairing_code(device_id):
+        logger.warning("Failed to invalidate pairing code after claim for device=%s", device_id)
 
     await db.insert_audit_log(
         {
             "action": "device.claim",
             "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
+            "actor_role": current_user.get("role"),
             "target_id": device_id,
             "request_id": request.state.request_id,
         }
@@ -209,7 +240,7 @@ async def claim_device(
     }
 
 
-@router.post("/devices/{device_id}/caregivers")
+@router.post("/devices/{device_id}/caregivers", deprecated=True)
 async def add_device_caregiver(
     device_id: str,
     payload: DeviceCaregiverRequest,
@@ -270,7 +301,7 @@ async def get_device_linked_users(
     return {"device_id": device_id, "count": len(items), "items": items}
 
 
-@router.delete("/devices/{device_id}/links/{user_id}")
+@router.delete("/devices/{device_id}/links/{user_id}", deprecated=True)
 async def unlink_device_from_user(
     device_id: str,
     user_id: str,
@@ -288,7 +319,7 @@ async def unlink_device_from_user(
     )
 
 
-@router.delete("/devices/{device_id}/caregivers/{user_id}")
+@router.delete("/devices/{device_id}/caregivers/{user_id}", deprecated=True)
 async def remove_device_caregiver(
     device_id: str,
     user_id: str,
@@ -375,7 +406,7 @@ async def request_ecg(
         {
             "action": "device.ecg.request",
             "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
+            "actor_role": current_user.get("role"),
             "target_id": device_id,
             "request_id": request.state.request_id,
             "details": {
@@ -415,7 +446,7 @@ async def update_device_thresholds(
         {
             "action": "device.thresholds.update",
             "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
+            "actor_role": current_user.get("role"),
             "target_id": device_id,
             "request_id": request.state.request_id,
             "details": {"updated_fields": sorted(threshold_dict.keys())},
@@ -445,7 +476,7 @@ async def rotate_esp_token(
         {
             "action": "device.esp_token.rotate",
             "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
+            "actor_role": current_user.get("role"),
             "target_id": device_id,
             "request_id": request.state.request_id,
         }
@@ -553,7 +584,7 @@ async def get_device_history(
     return await _get_device_history(device_id, start_time, end_time, limit, current_user)
 
 
-@router.get("/devices/{device_id}/vitals")
+@router.get("/devices/{device_id}/vitals", deprecated=True)
 async def get_device_vitals(
     device_id: str,
     start_time: Optional[float] = None,
@@ -723,7 +754,7 @@ async def cancel_device_command(
         {
             "action": "device.command.cancel",
             "actor_id": current_user["user_id"],
-            "actor_role": current_user["role"],
+            "actor_role": current_user.get("role"),
             "target_id": command_id,
             "request_id": request.state.request_id,
             "details": {"device_id": device_id},

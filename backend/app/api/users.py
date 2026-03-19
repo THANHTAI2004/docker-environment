@@ -33,7 +33,7 @@ async def create_user(
         {
             "action": "user.create",
             "actor_id": principal["user_id"],
-            "actor_role": principal["role"],
+            "actor_role": principal.get("role"),
             "target_id": user.user_id,
             "request_id": request.state.request_id,
             "details": {

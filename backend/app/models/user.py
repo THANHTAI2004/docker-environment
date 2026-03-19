@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Optional, List, Dict, Literal
 from pydantic import BaseModel, ConfigDict, Field, EmailStr
 
-UserRole = Literal["admin", "user", "patient", "caregiver", "manager"]
+SystemUserRole = Literal["admin"]
 
 
 class EmergencyContact(BaseModel):
@@ -51,7 +51,10 @@ class User(BaseModel):
     name: str
     age: Optional[int] = None
     gender: Optional[str] = None
-    role: UserRole = Field(..., description="Internal system role only, not product authorization")
+    role: Optional[SystemUserRole] = Field(
+        default=None,
+        description="Internal system role for admin accounts only.",
+    )
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     phone_number: Optional[str] = None
@@ -84,7 +87,10 @@ class UserCreate(BaseModel):
     """User creation request."""
     user_id: str
     name: str
-    role: UserRole
+    role: Optional[SystemUserRole] = Field(
+        default=None,
+        description="Optional internal system role. Omit for normal product users.",
+    )
     password: str = Field(..., min_length=8)
     email: Optional[EmailStr] = None
     phone: Optional[str] = None

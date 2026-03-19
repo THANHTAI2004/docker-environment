@@ -4,7 +4,7 @@ Tài liệu này mô tả chi tiết cách tích hợp ứng dụng (Flutter/Web
 
 ## 1. Mục tiêu tích hợp
 
-- App gọi API server để lấy dữ liệu sức khỏe theo user/device.
+- App gọi API server theo contract device-centric.
 - App tạo yêu cầu đo ECG on-demand cho thiết bị ESP.
 - App đọc alert và các thống kê tổng hợp để hiển thị dashboard.
 
@@ -57,46 +57,55 @@ Quy ước quyền:
 - `GET /api/v1/auth/me`
 - `POST /api/v1/users`
 - `GET /api/v1/users/{user_id}`
-- `PATCH /api/v1/users/{user_id}/thresholds`
 
-## 4.2 Health theo user
-- `GET /api/v1/users/{user_id}/latest`
-- `GET /api/v1/users/{user_id}/vitals?limit=100`
-- `GET /api/v1/users/{user_id}/ecg?limit=10`
-- `GET /api/v1/users/{user_id}/summary?period=24h`
+Lưu ý:
+- `role` chỉ còn dùng cho internal admin, không phải quyền sản phẩm.
+- User thường lấy quyền đọc/owner hoàn toàn từ `device_links.permission`.
 
-`period` hợp lệ: `1h | 6h | 24h | 7d | 30d`
-
-## 4.3 Device
+## 4.2 Device-centric contract
+- `GET /api/v1/me/devices`
 - `POST /api/v1/devices/register`
+- `POST /api/v1/devices/{device_id}/claim`
 - `GET /api/v1/devices/{device_id}`
 - `GET /api/v1/devices/{device_id}/latest`
 - `GET /api/v1/devices/{device_id}/history?limit=100`
+- `GET /api/v1/devices/{device_id}/ecg?limit=10`
 - `GET /api/v1/devices/{device_id}/summary?period=24h`
+- `GET /api/v1/devices/{device_id}/alerts`
+- `GET /api/v1/devices/{device_id}/linked-users`
+- `GET /api/v1/devices/{device_id}/viewers`
+- `POST /api/v1/devices/{device_id}/viewers`
+- `DELETE /api/v1/devices/{device_id}/viewers/{user_id}`
 - `POST /api/v1/devices/{device_id}/ecg/request`
 
 Endpoint admin-only:
 - `POST /api/v1/users`: có thể dùng `ADMIN_API_KEY` chỉ khi `ALLOW_ADMIN_API_KEY_BOOTSTRAP=true`
-- `PATCH /api/v1/users/{user_id}/thresholds`: cần admin JWT
 - `POST /api/v1/devices/register`: cần admin JWT
 
-## 4.4 Alerts
-- `GET /api/v1/users/{user_id}/alerts`
+`period` hợp lệ: `1h | 6h | 24h | 7d | 30d`
+
+## 4.3 Alerts
+- `GET /api/v1/me/alerts`
 - `POST /api/v1/alerts/{alert_id}/acknowledge`
 
 ## 5. Luồng dữ liệu chính cho App
 
 Luồng vitals thường:
 1. App gọi `POST /auth/login` để lấy JWT.
-2. App gọi `GET /users/{user_id}/latest` để cập nhật realtime.
-3. App gọi `GET /users/{user_id}/vitals` để lấy danh sách biểu đồ.
-4. App gọi `GET /users/{user_id}/summary` để hiển thị số liệu tổng hợp.
+2. App gọi `GET /me/devices` để lấy danh sách thiết bị đã được link.
+3. App chọn 1 thiết bị rồi gọi `GET /devices/{device_id}/latest`.
+4. App gọi `GET /devices/{device_id}/history` và `GET /devices/{device_id}/summary` để hiển thị số liệu.
 
 Luồng ECG on-demand:
-1. App gọi `POST /devices/{device_id}/ecg/request`.
+1. App gọi `POST /devices/{device_id}/ecg/request` với tài khoản owner.
 2. Server enqueue command cho ESP (`device_commands`).
 3. ESP poll command, đo ECG, gửi reading, ACK done/failed.
-4. App polling `GET /users/{user_id}/ecg` để nhận kết quả ECG mới.
+4. App polling `GET /devices/{device_id}/ecg` để nhận kết quả ECG mới.
+
+Luồng claim thiết bị:
+1. Admin đăng ký thiết bị qua `POST /devices/register`.
+2. Server trả về `pairing_code` một lần.
+3. App owner gọi `POST /devices/{device_id}/claim` với `pairing_code`.
 
 ## 6. Request/response mẫu
 
@@ -106,7 +115,7 @@ Luồng ECG on-demand:
 curl -X POST "$BASE_URL/api/v1/auth/login" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "user-001",
+    "phone_number": "0911100201",
     "password": "VeryStrongPassword"
   }'
 ```
@@ -120,7 +129,6 @@ curl -X POST "$BASE_URL/api/v1/users" \
   -d '{
     "user_id": "user-001",
     "name": "Nguyen Van A",
-    "role": "patient",
     "password": "VeryStrongPassword"
   }'
 ```
@@ -134,14 +142,24 @@ Response:
 }
 ```
 
-## 6.2 Yêu cầu ECG
+## 6.2 Claim thiết bị
+
+```bash
+curl -X POST "$BASE_URL/api/v1/devices/dev-esp-001/claim" \
+  -H "Authorization: Bearer $JWT_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pairing_code": "8H4K7Q2M"
+  }'
+```
+
+## 6.3 Yêu cầu ECG
 
 ```bash
 curl -X POST "$BASE_URL/api/v1/devices/dev-esp-001/ecg/request" \
   -H "Authorization: Bearer $JWT_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "user-001",
     "duration_seconds": 10,
     "sampling_rate": 250
   }'
@@ -159,10 +177,10 @@ Response mẫu:
 }
 ```
 
-## 6.3 Đọc dữ liệu ECG
+## 6.4 Đọc dữ liệu ECG
 
 ```bash
-curl -X GET "$BASE_URL/api/v1/users/user-001/ecg?limit=5" \
+curl -X GET "$BASE_URL/api/v1/devices/dev-esp-001/ecg?limit=5" \
   -H "Authorization: Bearer $JWT_ACCESS_TOKEN"
 ```
 

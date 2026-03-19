@@ -94,6 +94,23 @@ class Database:
 
         await collection.create_index(key_spec, expireAfterSeconds=ttl_seconds)
 
+    async def _ensure_sparse_index(self, collection, key_spec) -> None:
+        """Ensure one sparse index exists for the requested key specification."""
+        target_name = "_".join(f"{field}_{direction}" for field, direction in key_spec)
+        existing = None
+        async for idx in collection.list_indexes():
+            if idx.get("name") == target_name:
+                existing = idx
+                break
+
+        if existing is not None:
+            if existing.get("sparse"):
+                return
+            await collection.drop_index(target_name)
+            logger.info("Replaced index %s with sparse=true", target_name)
+
+        await collection.create_index(key_spec, sparse=True)
+
     async def create_indexes(self):
         """Create database indexes for query speed and retention."""
         if self.collection is None:
@@ -137,7 +154,8 @@ class Database:
             await self.users.create_index([("user_id", 1)], unique=True)
             await self.users.create_index([("phone_number", 1)], unique=True, sparse=True)
             await self.users.create_index([("email", 1)], unique=True, sparse=True)
-            await self.users.create_index([("role", 1)])
+            await self._ensure_sparse_index(self.users, [("role", 1)])
+            await self._normalize_existing_user_roles()
 
             # Device commands (ESP polling)
             await self.device_commands.create_index([("device_id", 1), ("status", 1), ("created_at", 1)])
@@ -207,8 +225,15 @@ class Database:
         if isinstance(output.get("date_of_birth"), date):
             output["date_of_birth"] = output["date_of_birth"].isoformat()
         output.pop("esp_token_hash", None)
+        output.pop("pairing_code_hash", None)
         output.pop("password_hash", None)
         return output
+
+    def _normalize_internal_user_role(self, role: Optional[str]) -> Optional[str]:
+        """Only the internal admin role remains meaningful on user records."""
+        if role == "admin":
+            return "admin"
+        return None
 
     def _normalize_device_permission(self, permission: Optional[str]) -> Optional[str]:
         """Map legacy permission aliases to the canonical owner/viewer model."""
@@ -337,6 +362,23 @@ class Database:
         device_ids = await self.device_links.distinct("device_id")
         for device_id in device_ids:
             await self._sync_device_owner_cache(device_id)
+
+    async def _normalize_existing_user_roles(self) -> None:
+        """Drop legacy product roles so only internal admin remains on user records."""
+        if self.users is None:
+            return
+
+        result = await self.users.update_many(
+            {
+                "role": {
+                    "$exists": True,
+                    "$ne": "admin",
+                }
+            },
+            {"$unset": {"role": ""}},
+        )
+        if result.modified_count > 0:
+            logger.info("Removed legacy product roles from %s user documents", result.modified_count)
 
     async def _sync_device_owner_cache(self, device_id: str) -> None:
         """Cache the active owner user ID on the device document for fast lookups."""
@@ -739,6 +781,27 @@ class Database:
             logger.error("Device registration error: %s", exc)
             return False
 
+    async def clear_device_pairing_code(self, device_id: str) -> bool:
+        """Invalidate the stored pairing code after a successful claim."""
+        if self.devices is None:
+            return False
+        try:
+            result = await self.devices.update_one(
+                {"device_id": device_id},
+                {
+                    "$unset": {
+                        "pairing_code_hash": "",
+                    },
+                    "$set": {
+                        "pairing_code_claimed_at": datetime.utcnow(),
+                    },
+                },
+            )
+            return result.matched_count > 0
+        except Exception as exc:
+            logger.error("Clear device pairing code error: %s", exc)
+            return False
+
     async def get_device(self, device_id: str) -> Optional[Dict[str, Any]]:
         """Get device by ID."""
         if self.devices is None:
@@ -748,6 +811,20 @@ class Database:
             return self._serialize_doc(doc) if doc else None
         except Exception as exc:
             logger.error("Device query error: %s", exc)
+            return None
+
+    async def get_device_internal(self, device_id: str) -> Optional[Dict[str, Any]]:
+        """Get raw device document for internal authorization flows."""
+        if self.devices is None:
+            return None
+        try:
+            doc = await self.devices.find_one({"device_id": device_id})
+            if not doc:
+                return None
+            doc["_id"] = str(doc.get("_id"))
+            return doc
+        except Exception as exc:
+            logger.error("Internal device query error: %s", exc)
             return None
 
     async def get_device_command(self, command_id: str, device_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -1518,6 +1595,11 @@ class Database:
             return False
         try:
             doc = dict(doc)
+            role = self._normalize_internal_user_role(doc.get("role"))
+            if role:
+                doc["role"] = role
+            else:
+                doc.pop("role", None)
             doc["created_at"] = datetime.utcnow()
             await self.users.insert_one(doc)
             return True
@@ -1533,7 +1615,15 @@ class Database:
             return None
         try:
             doc = await self.users.find_one({"user_id": user_id})
-            return self._serialize_doc(doc) if doc else None
+            if not doc:
+                return None
+            serialized = self._serialize_doc(doc)
+            role = self._normalize_internal_user_role(serialized.get("role"))
+            if role:
+                serialized["role"] = role
+            else:
+                serialized.pop("role", None)
+            return serialized
         except Exception as exc:
             logger.error("User query error: %s", exc)
             return None
@@ -1547,6 +1637,11 @@ class Database:
             if not doc:
                 return None
             doc["_id"] = str(doc.get("_id"))
+            role = self._normalize_internal_user_role(doc.get("role"))
+            if role:
+                doc["role"] = role
+            else:
+                doc.pop("role", None)
             return doc
         except Exception as exc:
             logger.error("User auth query error: %s", exc)
@@ -1561,6 +1656,11 @@ class Database:
             if not doc:
                 return None
             doc["_id"] = str(doc.get("_id"))
+            role = self._normalize_internal_user_role(doc.get("role"))
+            if role:
+                doc["role"] = role
+            else:
+                doc.pop("role", None)
             return doc
         except Exception as exc:
             logger.error("User auth phone query error: %s", exc)
@@ -1595,6 +1695,11 @@ class Database:
             return False
         try:
             payload = dict(data)
+            role = self._normalize_internal_user_role(payload.get("role"))
+            if role:
+                payload["role"] = role
+            else:
+                payload.pop("role", None)
             payload.setdefault("created_at", datetime.utcnow())
             await self.users.insert_one(payload)
             return True

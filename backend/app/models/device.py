@@ -53,6 +53,17 @@ class DeviceRegistration(BaseModel):
     metadata: Optional[DeviceMetadata] = None
     settings: Optional[DeviceSettings] = None
     alert_thresholds: Optional[AlertThresholds] = None
+    pairing_code: Optional[str] = Field(
+        default=None,
+        min_length=6,
+        max_length=32,
+        description="Optional one-time pairing code used for initial device claim.",
+    )
+
+
+class DeviceClaimRequest(BaseModel):
+    """Claim payload that proves physical access to a device."""
+    pairing_code: str = Field(..., min_length=6, max_length=32)
 
 
 class ECGRequestCommand(BaseModel):
