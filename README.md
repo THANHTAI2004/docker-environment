@@ -1,516 +1,524 @@
-﻿# Wearable Health Monitoring Backend
+# Wearable Health Monitoring Server
 
-Tài liệu này mô tả hệ thống server trong repo `docker-environment`, theo đúng cấu trúc 15 mục yêu cầu để phục vụ team backend, firmware (ESP32) và app Flutter/Web.
+README nay mo ta trang thai hien tai cua server trong repo `docker-environment`, dong bo voi:
 
-Cập nhật theo source hiện tại: **2026-03-16**
+- source backend FastAPI dang co trong `backend/app`
+- `docker-compose.yml` va `.env` dang chay
+- MongoDB da duoc reset va seed lai bo du lieu demo `*-401`
 
-## 1. Mục tiêu hệ thống
+Cap nhat theo trang thai server hien tai: **2026-03-20**
 
-Server dùng để làm gì:
-- Nhận dữ liệu sức khỏe từ thiết bị đeo (nhịp tim, SpO2, nhiệt độ, nhịp thở, ECG).
-- Chuẩn hóa, lưu trữ dữ liệu vào MongoDB.
-- Phân tích ngưỡng để tạo cảnh báo tự động.
-- Cung cấp API cho app/web truy vấn dữ liệu realtime và lịch sử.
+## 1. Tong quan
 
-Phục vụ app/web/device nào:
-- ESP32 wearable device (chest/wrist): gửi readings và nhận command ECG.
-- Flutter app (mobile/web): lấy latest/history/summary/ECG và gửi yêu cầu ECG on-demand.
-- Admin/client nội bộ: quản lý user, device, token, thresholds.
+He thong nay la backend cho bai toan theo doi suc khoe bang thiet bi deo. Server co 3 nhom client chinh:
 
-Người dùng hoặc client nào kết nối vào:
-- Thiết bị ESP32 qua `/api/v1/esp/*`.
-- App/Admin qua `/api/v1/*`.
-- Health check nội bộ qua `/live`, `/ready`, `/health`.
+- ESP32 wearable gui readings va nhan lenh ECG qua REST
+- app mobile/web dang nhap bang user account va doc du lieu theo tung device
+- admin tool dung de bootstrap user, register device, xoay token ESP va van hanh he thong
 
-## 2. Tổng quan kiến trúc
+Backend hien tai da chuyen sang mo hinh **device-centric**:
 
-Mô hình tổng thể của hệ thống:
+- du lieu duoc doc theo `device_id`
+- quyen truy cap suy ra tu `device_links`
+- quyen hop le chi gom `owner` va `viewer`
 
-```text
-ESP32 (X-Device-Token)
-    -> FastAPI Backend (wearable-backend)
-        -> MongoDB (mongodb)
-        -> Redis (rate limit)
-Flutter/Web/Admin (JWT Bearer)
-    -> FastAPI Backend
+`user.role` khong phai nguon quyen chinh cho app hang ngay. `role=admin` chi dung cho he thong va bootstrap.
+
+## 2. Trang thai server dang chay
+
+Server hien dang chay voi:
+
+- local API: `http://127.0.0.1:18000`
+- public API: `https://api.eldercare.io.vn`
+- backend container: `wearable-backend`
+- MongoDB container: `mongodb`
+- Redis container: `wearable-redis`
+- Cloudflare tunnel container: `cloudflared`
+
+Trang thai container hien tai:
+
+- backend: healthy
+- mongodb: healthy
+- redis: healthy
+
+Health endpoint:
+
+- `GET /live`
+- `GET /ready`
+- `GET /health`
+
+Readiness payload hien tai:
+
+```json
+{
+  "status": "ok",
+  "database": "connected",
+  "ingest_mode": "rest_api"
+}
 ```
 
-Các thành phần chính:
-- Backend: FastAPI (`backend/app`).
-- Database: MongoDB.
-- Rate limit/cache: Redis.
-- Queue: sử dụng collection MongoDB `device_commands` với recovery loop, retry guardrail và metrics riêng (không dùng Redis/RabbitMQ).
-- Proxy/Tunnel: Cloudflare Tunnel (optional), Nginx config mẫu.
-- Container: Docker Compose.
+## 3. Kien truc tong the
 
-Cách các thành phần giao tiếp với nhau:
-- ESP32 -> Backend: HTTPS REST + `X-Device-Token`.
-- App/Web -> Backend: HTTPS REST + `Authorization: Bearer <JWT>`.
-- Backend -> MongoDB: Motor async driver.
-- Backend -> Redis: Redis async client cho rate limit.
-- Cloudflare/Nginx (nếu bật) đứng trước backend làm public endpoint/reverse proxy.
+```text
+ESP32 Device
+  -> HTTPS REST + X-Device-Token
+  -> FastAPI Backend
+  -> MongoDB
 
-## 3. Công nghệ sử dụng
+Mobile/Web/Admin App
+  -> HTTPS REST + Authorization: Bearer <JWT>
+  -> FastAPI Backend
+  -> MongoDB
 
-Ngôn ngữ, framework:
-- Python 3.11
-- FastAPI
-- Uvicorn
-- Pydantic v2 + pydantic-settings
+FastAPI Backend
+  -> Redis (rate limit)
+  -> MongoDB device_commands (ECG queue)
+  -> Prometheus-style metrics
+  -> structured logging
+```
 
-Database:
-- MongoDB
+Thanh phan trong compose:
 
-Web server / reverse proxy:
-- Uvicorn chạy trong container backend
-- Nginx cấu hình mẫu tại `nginx/nginx.conf` (chưa chạy mặc định trong compose)
+- `redis`: luu rate-limit state
+- `mongodb`: database chinh
+- `backend`: API FastAPI/Uvicorn
+- `cloudflared`: stable tunnel public
+- `cloudflared-quick`: quick tunnel profile
+- `nodered`: profile `tools`, khong chay mac dinh
 
-Docker, cloud, CI/CD nếu có:
-- Docker Compose (`docker-compose.yml`)
-- Production override (`docker-compose.prod.yml`)
-- Network mode compose (`docker-compose.network.yml`)
-- Cloudflare Tunnel (`cloudflared`, `cloudflared-quick`)
-- CI/CD: GitHub Actions tối thiểu tại `.github/workflows/ci.yml`
+## 4. Cong nghe va runtime
 
-Ví dụ stack hiện tại:
-- Python + FastAPI
-- MongoDB
-- Nginx (optional)
-- Docker Compose
+- Python `3.11`
+- FastAPI `0.100.0`
+- Uvicorn `0.22.0`
+- Motor `3.7.1`
+- Redis client `5.2.1`
+- Prometheus client `0.21.1`
+- MongoDB image `8.2.5`
+- Redis image `7-alpine`
 
-## 4. Cấu trúc thư mục/source code
+Docker image backend:
 
-Thư mục nào dùng để làm gì:
+- multi-stage build
+- chay bang user khong phai root
+- expose port noi bo `8000`
+
+## 5. Cau truc repo
 
 ```text
 backend/
   Dockerfile
+  requirements-prod.txt
   requirements.txt
   app/
-    main.py            # Entry point FastAPI
-    config.py          # Settings từ env
-    db.py              # Kết nối Mongo + index + CRUD
-    api/               # Routes
-      devices.py
+    main.py
+    config.py
+    db.py
+    observability.py
+    api/
+      auth.py
       users.py
-      health.py
+      devices.py
       alerts.py
+      health.py
       esp.py
-    models/            # Pydantic models
-    services/          # Business logic
+    services/
       health_service.py
       alert_service.py
-    utils/             # Auth, validators, ECG utils
+    utils/
+      auth.py
+      access.py
+      rate_limit.py
+      ecg_processing.py
+
+docs/
+  app-api.md
+  app_server_contract.md
+  me-devices-contract.md
 
 scripts/
   backup.sh
   restore.sh
   monitor.sh
+  smoke-api.sh
   cloudflare-longterm.sh
   setup-mdns.sh
 
-nginx/
-  nginx.conf
-
-logs/                 # Log monitor script
-backups/              # File backup Mongo
+docker-compose.yml
+docker-compose.prod.yml
+docker-compose.network.yml
+.env.example
+README.md
 ```
 
-File chính để chạy server:
-- `backend/app/main.py` (chạy bằng `uvicorn app.main:app ...`)
-- Hoặc chạy full stack qua `docker-compose.yml`
+## 6. Auth va phan quyen hien tai
 
-Nơi chứa config, route, model, service, util:
-- Config: `backend/app/config.py`, root `.env`
-- Route: `backend/app/api/*`
-- Model: `backend/app/models/*`
-- Service: `backend/app/services/*`
-- Util: `backend/app/utils/*`
+### App/Web
 
-## 5. Môi trường chạy
+Login hien tai dung:
 
-Hệ điều hành hoặc container:
-- Linux/WSL2 + Docker Engine là môi trường khuyến nghị.
-- Backend container dùng base image `python:3.11-slim`.
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`
+- `GET /api/v1/auth/me`
 
-Yêu cầu cài đặt:
-- Docker + Docker Compose plugin.
-- Nếu chạy local không Docker: Python 3.11, pip.
+Bearer auth:
 
-Version cần dùng:
-- `fastapi==0.100.0`
-- `uvicorn[standard]==0.22.0`
-- `motor==3.7.1`
-- `python-dotenv==1.0.0`
-- `pydantic-settings==2.0.3`
-
-Cách cài dependency (local):
-
-```bash
-cd backend
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+```http
+Authorization: Bearer <access_token>
 ```
 
-## 6. Cấu hình hệ thống
+Refresh token la opaque token, duoc luu hash trong collection `auth_sessions`.
 
-Biến môi trường cần thiết:
-- Mongo: `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD`, `MONGO_HOST_PORT`, `MONGO_BIND_IP`
-- API/Auth: `API_KEY`, `ADMIN_API_KEY`, `DEVICE_TOKEN_SECRET`, `JWT_SECRET`, `REFRESH_TOKEN_SECRET`
-- Backend: `BACKEND_HOST_PORT`, `BACKEND_BIND_IP`, `EXPOSE_API_DOCS`
-- CORS: `CORS_ALLOW_ORIGINS`, `CORS_ALLOW_ORIGIN_REGEX`
-- Rate-limit: `RATE_LIMIT_ENABLED`, `RATE_LIMIT_STORAGE`, `REDIS_URL`, `RATE_LIMIT_GENERAL_PER_MINUTE`, `RATE_LIMIT_ESP_PER_MINUTE`
-- Command queue: `COMMAND_TTL_SECONDS`, `COMMAND_ACK_TIMEOUT_SECONDS`, `COMMAND_RETRY_DELAY_SECONDS`, `COMMAND_RECOVERY_INTERVAL_SECONDS`
-- Metrics: `EXPOSE_METRICS`, `METRICS_TOKEN`, `METRICS_ALLOW_IPS`
-- Cloudflare (optional): `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARE_PUBLIC_URL`
+**Luu y quan trong:** login hien tai dung `phone_number + password`, khong dung `user_id + password`.
 
-Port chạy:
-- Backend: `${BACKEND_BIND_IP}:${BACKEND_HOST_PORT}` (mặc định `127.0.0.1:8000`)
-- MongoDB: `${MONGO_BIND_IP}:${MONGO_HOST_PORT}` (mặc định `127.0.0.1:27017`)
-- Node-RED (optional): `${NODERED_BIND_IP}:${NODERED_HOST_PORT}` (mặc định `127.0.0.1:1880`)
+### Device permissions
 
-Key/token:
-- `Authorization: Bearer <JWT>` cho app/admin.
-- `refresh_token` opaque được rotate qua `POST /api/v1/auth/refresh`.
-- `ADMIN_API_KEY` là bootstrap/break-glass secret chỉ dành cho bootstrap có kiểm soát.
-- `X-Device-Token` cho ESP.
-- Token thiết bị được hash (`sha256(secret:token)`) trước khi lưu vào DB.
+Quyen du lieu device duoc suy ra tu `device_links.permission`:
 
-Config database:
-- Backend dùng `MONGO_URI` và `MONGO_DB` (compose set mặc định DB `wearable`).
-- Collections chính: `health_readings`, `device_commands`, `devices`, `users`, `alerts`.
+- `owner`: doc du lieu, xem linked users, them/xoa viewer, sua thresholds, request ECG, cancel command, rotate ESP token
+- `viewer`: doc du lieu va linked users
 
-Config bảo mật:
-- CORS whitelist + regex.
-- JWT + RBAC (`admin / caregiver / patient`) cho app/admin.
-- Redis-backed rate limit theo JWT subject / API key / device.
-- API docs mặc định tắt (`EXPOSE_API_DOCS=false`).
+### Admin/bootstrap
 
-## 7. Cách khởi động server
+Co 2 luong tao user:
 
-Lệnh chạy local:
+- `POST /api/v1/auth/register`: user tu dang ky, backend tu generate `user_id`
+- `POST /api/v1/users`: bootstrap/manual create
 
-```bash
-cd backend
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+`POST /api/v1/users` mac dinh yeu cau admin JWT. Duong `ADMIN_API_KEY` chi duoc mo khi `ALLOW_ADMIN_API_KEY_BOOTSTRAP=true`.
 
-# set env phù hợp trước khi chạy
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+### ESP32
+
+ESP dung:
+
+```http
+X-Device-Token: <device_token>
 ```
 
-Lệnh chạy bằng Docker:
+ESP token va pairing code deu chi luu hash trong MongoDB.
+
+## 7. API chinh thuc dang dung
+
+### Auth
+
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`
+- `GET /api/v1/auth/me`
+
+### User va ownership
+
+- `POST /api/v1/users`
+- `GET /api/v1/me/devices`
+- `GET /api/v1/users/{user_id}`
+- `POST /api/v1/devices/register`
+- `POST /api/v1/devices/{device_id}/claim`
+- `POST /api/v1/devices/{device_id}/viewers`
+- `GET /api/v1/devices/{device_id}/viewers`
+- `GET /api/v1/devices/{device_id}/linked-users`
+- `DELETE /api/v1/devices/{device_id}/viewers/{user_id}`
+- `PATCH /api/v1/devices/{device_id}/thresholds`
+- `POST /api/v1/devices/{device_id}/esp-token`
+
+### Device data va alerts
+
+- `GET /api/v1/devices/{device_id}`
+- `GET /api/v1/devices/{device_id}/latest`
+- `GET /api/v1/devices/{device_id}/history`
+- `GET /api/v1/devices/{device_id}/ecg`
+- `GET /api/v1/devices/{device_id}/summary`
+- `GET /api/v1/devices/{device_id}/alerts`
+- `GET /api/v1/me/alerts`
+- `POST /api/v1/alerts/{alert_id}/acknowledge`
+- `POST /api/v1/health/readings`
+- `POST /api/v1/devices/{device_id}/ecg/request`
+- `POST /api/v1/devices/{device_id}/commands/{command_id}/cancel`
+
+### ESP endpoints
+
+- `POST /api/v1/esp/devices/{device_id}/readings`
+- `GET /api/v1/esp/devices/{device_id}/commands/next`
+- `POST /api/v1/esp/devices/{device_id}/commands/{command_id}/ack`
+
+## 8. Endpoint cu van con ton tai
+
+Van con co de tuong thich nguoc, nhung client moi khong nen dung:
+
+- `GET /api/v1/users/{user_id}/vitals`
+- `GET /api/v1/users/{user_id}/latest`
+- `GET /api/v1/users/{user_id}/ecg`
+- `GET /api/v1/users/{user_id}/summary`
+- `GET /api/v1/users/{user_id}/alerts`
+- `GET /api/v1/public/devices/*`
+- `POST /api/v1/devices/{device_id}/links`
+- `DELETE /api/v1/devices/{device_id}/links/{user_id}`
+- `POST /api/v1/devices/{device_id}/caregivers`
+- `DELETE /api/v1/devices/{device_id}/caregivers/{user_id}`
+- `POST /readings`
+- `GET /history/{device_id}`
+
+Khuyen nghi cho app moi:
+
+- `login -> /api/v1/me/devices -> /api/v1/devices/{device_id}/latest|history|summary|alerts|ecg`
+
+## 9. Database va collections
+
+Database mac dinh:
+
+- `wearable`
+
+Collections chinh:
+
+- `users`
+- `devices`
+- `device_links`
+- `health_readings`
+- `alerts`
+- `device_commands`
+- `auth_sessions`
+- `audit_logs`
+- `readings` (legacy)
+
+Index va retention dang duoc tao boi backend:
+
+- `health_readings.recorded_at`: TTL `90 ngay`
+- `alerts.recorded_at`: TTL `180 ngay`
+- `health_readings(device_id, seq)`: unique partial de dedupe
+- `devices.device_id`: unique
+- `users.user_id`: unique
+- `users.phone_number`: unique sparse
+- `device_links(device_id, user_id)`: unique
+- `device_commands.request_id`: unique sparse
+
+## 10. Du lieu demo hien co tren server
+
+MongoDB da duoc xoa du lieu cu va seed lai bo demo moi vao ngay **2026-03-20**.
+
+So luong record hien tai:
+
+- `users`: `6`
+- `devices`: `3`
+- `device_links`: `3`
+- `health_readings`: `6`
+- `alerts`: `11`
+
+### Users demo
+
+- `admin-ops-401` | `Admin Ops 401` | phone `+84909000401` | role `admin`
+- `user-owner-401` | `Owner Demo 401` | phone `+84911100401`
+- `user-viewer-401` | `Viewer Demo 401` | phone `+84922200401`
+- `user-private-401` | `Private Demo 401` | phone `+84933300401`
+- `user-claim-401` | `Claim Demo 401` | phone `+84944400401`
+- `user-friend-401` | `Friend Demo 401` | phone `+84955500401`
+
+### Devices demo
+
+- `dev-shared-401` | `Shared Wrist 401` | owner `user-owner-401`
+- `dev-private-401` | `Private Chest 401` | owner `user-private-401`
+- `dev-free-401` | `Free Wrist 401` | chua co owner
+
+### Muc dich tung device
+
+- `dev-shared-401`: test owner/viewer sharing
+- `dev-private-401`: test vitals xau, alert warning/critical
+- `dev-free-401`: test claim device bang pairing code
+
+### Ghi chu
+
+- bo demo hien tai da co san `1` mau ECG tren `dev-shared-401`
+- `dev-private-401` da co nhieu alert de test man hinh alerts
+- login app phai dung `phone_number`, khong dung `user_id`
+
+## 11. Luong xu ly du lieu
+
+### ESP ingest
+
+1. ESP goi `POST /api/v1/esp/devices/{device_id}/readings` kem `X-Device-Token`
+2. backend validate token va payload
+3. `health_service` normalize va luu vao `health_readings`
+4. `alert_service` sinh alert neu vuot nguong
+5. app doc lai qua `latest`, `history`, `summary`, `alerts`, `ecg`
+
+### ECG on-demand
+
+1. owner goi `POST /api/v1/devices/{device_id}/ecg/request`
+2. backend enqueue command vao `device_commands`
+3. ESP poll `GET /api/v1/esp/devices/{device_id}/commands/next`
+4. ESP gui ACK sau khi thuc thi
+5. recovery loop xu ly retry, completed, failed, expired, cancelled
+
+### Claim device
+
+1. admin register device qua `POST /api/v1/devices/register`
+2. backend tra `pairing_code` mot lan
+3. user login va goi `POST /api/v1/devices/{device_id}/claim`
+4. backend tao owner link trong `device_links`
+5. pairing code hash bi clear sau khi claim thanh cong
+
+## 12. Cach chay server
+
+### Chay bang Docker
 
 ```bash
 cp .env.example .env
-# chỉnh .env
-
 docker compose up -d --build
-```
-
-Cách stop/restart:
-
-```bash
-docker compose stop
-docker compose restart backend
-docker compose down
-```
-
-Cách kiểm tra server đã lên chưa:
-
-```bash
-curl -sS http://127.0.0.1:8000/ready
 docker compose ps
-docker compose logs -f backend
 ```
 
-Smoke test nhanh sau deploy:
+Health check local theo server dang chay hien tai:
 
 ```bash
-SMOKE_BASE_URL=http://127.0.0.1:18000 \
-SMOKE_USER_ID=<user_id> \
-SMOKE_PASSWORD='<password>' \
-SMOKE_DEVICE_ID=<device_id> \
-./scripts/smoke-api.sh
+curl -sS http://127.0.0.1:18000/ready
 ```
 
-Tai lieu API danh cho app: `docs/app-api.md`
+### Chay backend local
 
-## 8. API và chức năng chính
-
-Các endpoint chính:
-
-App/Admin (`/api/v1`):
-- `POST /auth/login`
-- `POST /auth/refresh`
-- `POST /auth/logout`
-- `GET /auth/me`
-- `POST /users`
-- `GET /users/{user_id}`
-- `PATCH /users/{user_id}/thresholds`
-- `POST /devices/register`
-- `GET /devices/{device_id}`
-- `POST /devices/{device_id}/esp-token`
-- `POST /devices/{device_id}/ecg/request`
-- `GET /devices/{device_id}/latest`
-- `GET /devices/{device_id}/history`
-- `GET /devices/{device_id}/vitals`
-- `GET /devices/{device_id}/summary`
-- `GET /users/{user_id}/latest`
-- `GET /users/{user_id}/vitals`
-- `GET /users/{user_id}/ecg`
-- `GET /users/{user_id}/summary`
-- `GET /users/{user_id}/alerts`
-- `POST /alerts/{alert_id}/acknowledge`
-- `POST /health/readings` (test/manual ingest)
-
-Ghi chú quyền:
-- Endpoint bootstrap/break-glass admin: `POST /users` khi `ALLOW_ADMIN_API_KEY_BOOTSTRAP=true`
-- App/Web thường dùng JWT Bearer cho đọc dữ liệu và request ECG.
-- RBAC: `admin` xem toàn bộ, `patient` chỉ xem dữ liệu của chính mình, `caregiver` chỉ xem patient được gán.
-
-ESP (`/api/v1/esp`):
-- `POST /devices/{device_id}/readings`
-- `GET /devices/{device_id}/commands/next`
-- `POST /devices/{device_id}/commands/{command_id}/ack`
-
-Legacy:
-- `POST /readings`
-- `GET /history/{device_id}`
-- `GET /api/v1/public/devices/*` (deprecated aliases, vẫn yêu cầu auth)
-
-Input/output (ví dụ nhanh):
-
-```json
-POST /api/v1/esp/devices/dev-001/readings
-{
-  "timestamp": 1771763000.12,
-  "seq": 1,
-  "vitals": {
-    "heart_rate": 80,
-    "respiratory_rate": 16,
-    "temperature": 36.8,
-    "spo2": 98
-  }
-}
+```bash
+cd backend
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-prod.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-```json
-{
-  "status": "success",
-  "device_id": "dev-001"
-}
-```
+Luu y:
 
-Xác thực:
-- App/Admin: JWT Bearer qua `Authorization`.
-- Chỉ endpoint bootstrap tạo user hỗ trợ `ADMIN_API_KEY` khi `ALLOW_ADMIN_API_KEY_BOOTSTRAP=true`.
-- ESP: bắt buộc header `X-Device-Token`.
+- local mode van can MongoDB va Redis
+- `config.py` se fail-fast neu secret dang de placeholder
 
-Mã lỗi thường gặp:
-- `400`: request hợp lệ cú pháp nhưng sai logic nghiệp vụ
-- `401`: thiếu/sai bearer token, admin key hoặc device token
-- `403`: đúng danh tính nhưng không đủ quyền/ownership
-- `404`: không tìm thấy tài nguyên/dữ liệu
-- `422`: lỗi validation payload
-- `429`: vượt rate limit
-- `500`: lỗi nội bộ server
+## 13. Bien moi truong quan trong
 
-Tài liệu `/docs` nếu có:
-- Chỉ bật khi `EXPOSE_API_DOCS=true`.
-- Khi bật: `/docs`, `/redoc`, `/openapi.json`.
+### Secrets va auth
 
-## 9. Database
+- `API_KEY`
+- `ADMIN_API_KEY`
+- `DEVICE_TOKEN_SECRET`
+- `JWT_SECRET`
+- `REFRESH_TOKEN_SECRET`
 
-Loại database:
-- MongoDB
+### Database va network
 
-Collection chính:
-- `health_readings`
-- `device_commands`
-- `devices`
-- `users`
-- `alerts`
-- `auth_sessions`
-- `readings` (legacy)
+- `MONGO_ROOT_USERNAME`
+- `MONGO_ROOT_PASSWORD`
+- `MONGO_BIND_IP`
+- `MONGO_HOST_PORT`
+- `BACKEND_BIND_IP`
+- `BACKEND_HOST_PORT`
+- `REDIS_URL`
 
-Schema dữ liệu (rút gọn):
-- `health_readings`: `device_id`, `user_id`, `timestamp`, `vitals`, `ecg`, `metadata`, `recorded_at`, `received_at`, `seq`
-- `device_commands`: `device_id`, `user_id`, `request_id`, `command`, `payload`, `status`, `dispatch_count`, `dispatched_at`, `last_dispatched_at`, `next_retry_at`, `failure_reason`, `last_error`, `expires_at`, `completed_at`
-- `devices`: `device_id`, `device_type`, `user_id`, `status`, `esp_token_hash`, `metadata`, `last_seen`
-- `users`: `user_id`, `name`, `role`, `alert_thresholds`, `created_at`
-- `alerts`: `device_id`, `user_id`, `severity`, `metric`, `value`, `threshold`, `acknowledged`
+Gia tri dang chay tren server local hien tai:
 
-Index:
-- `health_readings`: `(user_id, timestamp desc)`, `(device_id, timestamp desc)`
-- Unique dedup: `(device_id, seq)` với partial index khi `seq` là number
-- TTL: `health_readings.recorded_at` (~90 ngày)
-- TTL: `alerts.recorded_at` (~180 ngày)
-- TTL: `device_commands.expires_at` (xóa khi hết hạn)
-- Unique: `devices.device_id`, `users.user_id`, `device_commands.request_id`
+- `BACKEND_HOST_PORT=18000`
+- `MONGO_HOST_PORT=27017`
+- `CLOUDFLARE_PUBLIC_URL=https://api.eldercare.io.vn`
 
-Quan hệ dữ liệu nếu có:
-- Quan hệ mềm bằng khóa logic, không có foreign key cứng:
-  - `devices.user_id` -> `users.user_id`
-  - `health_readings.user_id/device_id` liên kết user/device
-  - `alerts.user_id/device_id` liên kết user/device
-  - `device_commands.device_id/user_id` liên kết command với thiết bị và user
+### Queue, rate limit, observability
 
-## 10. Luồng xử lý dữ liệu
+- `RATE_LIMIT_ENABLED`
+- `RATE_LIMIT_STORAGE`
+- `RATE_LIMIT_GENERAL_PER_MINUTE`
+- `RATE_LIMIT_ESP_PER_MINUTE`
+- `COMMAND_TTL_SECONDS`
+- `COMMAND_ACK_TIMEOUT_SECONDS`
+- `COMMAND_RETRY_DELAY_SECONDS`
+- `COMMAND_RECOVERY_INTERVAL_SECONDS`
+- `EXPOSE_API_DOCS`
+- `EXPOSE_METRICS`
+- `METRICS_TOKEN`
+- `METRICS_ALLOW_IPS`
+- `ALLOW_ADMIN_API_KEY_BOOTSTRAP`
 
-Request đi vào đâu:
-- ESP đi vào `backend/app/api/esp.py`.
-- App/Admin đi vào `backend/app/api/*.py` tương ứng domain.
+## 14. Docs, metrics va logging
 
-Xử lý ở service nào:
-- Health ingest xử lý ở `health_service.process_health_reading()`.
-- Alert sinh ở `alert_service.check_health_reading()`.
+Swagger/OpenAPI docs:
 
-Lưu database ra sao:
-- `db.insert_health_reading()` lưu reading đã normalize.
-- `db.enqueue_device_command()` tạo command ECG.
-- `db.claim_next_device_command()` phát command cho ESP poll.
-- `db.acknowledge_device_command()` cập nhật trạng thái done/failed.
-- Background recovery loop quét command `dispatched` bị timeout để retry hoặc fail terminal, và finalize `acked -> completed`.
+- `EXPOSE_API_DOCS=false` tren server hien tai
+- vi vay `/docs`, `/redoc`, `/openapi.json` dang tat
 
-Trả kết quả về client thế nào:
-- API trả JSON trực tiếp.
-- ESP nhận `status=idle|ok` khi poll command.
-- App truy vấn `/latest`, `/vitals`, `/ecg`, `/summary` để hiển thị.
+Metrics:
 
-## 11. Bảo mật
+- endpoint: `GET /metrics`
+- chi mo khi `EXPOSE_METRICS=true`
+- co allow-list IP va co the dung `X-Metrics-Token`
 
-Authentication / authorization:
-- JWT Bearer cho app/admin.
-- `ADMIN_API_KEY` cho bootstrap/break-glass admin.
-- `X-Device-Token` cho API ESP.
-- RBAC theo `admin / caregiver / patient`.
-- Ownership check giữa `user_id` và `device_id`.
-
-API key, JWT, token thiết bị:
-- API key: env `API_KEY` chỉ dùng cho compatibility nội bộ nếu cần.
-- Admin key: env `ADMIN_API_KEY` cho bootstrap/break-glass.
-- JWT: access token ký bằng `JWT_SECRET`.
-- Refresh token: hash bằng `REFRESH_TOKEN_SECRET`, lưu trong `auth_sessions`, rotate theo mỗi lần refresh.
-- Device token: cấp qua endpoint rotate token, lưu dưới dạng hash trong DB.
-
-CORS:
-- `CORS_ALLOW_ORIGINS` và `CORS_ALLOW_ORIGIN_REGEX`.
-
-Mã hóa dữ liệu nếu có:
-- Token thiết bị được băm SHA-256 với secret trước khi lưu (`sha256(secret:token)`).
-- TLS/HTTPS phụ thuộc lớp reverse proxy/tunnel (Cloudflare/Nginx).
-
-Giới hạn truy cập:
-- Rate limit Redis-backed theo JWT subject / API key / device.
-- Header phản hồi có `X-RateLimit-Remaining`, khi vượt giới hạn trả `429`.
-
-## 12. Logging và giám sát
-
-Log nằm ở đâu:
-- Backend container: `docker compose logs backend`
-- MongoDB container: `docker compose logs mongodb`
-- Cloudflared: `docker compose logs cloudflared`
-- Monitor script: `logs/health_monitor.log`
-
-Cách xem log:
+Logs:
 
 ```bash
 docker compose logs -f backend
 docker compose logs -f mongodb
+docker compose logs -f wearable-redis
 tail -f logs/health_monitor.log
 ```
 
-Health check:
-- API: `GET /health`
-- Liveness: `GET /live`
-- Readiness: `GET /ready` hoặc `GET /health` và sẽ trả `503` khi DB lỗi
-- Docker healthcheck đã cấu hình cho backend dùng `/ready` và mongodb dùng ping nội bộ.
-- Metrics: `GET /metrics`
+Moi response API deu co `X-Request-ID` de truy vet.
 
-Debug lỗi:
-- Kiểm tra `docker compose ps`.
-- So log backend/mongodb.
-- Gọi test nhanh endpoint `/ready` hoặc `/health` và endpoint nghiệp vụ.
+## 15. Backup, restore, monitor
 
-Monitoring nếu có:
-- `scripts/monitor.sh` kiểm tra health endpoint, trạng thái container, disk usage.
-- Prometheus có thể scrape `/metrics`.
-- Metrics domain chính hiện có: auth login/refresh/revoke, queue dispatch/retry/timeout/completed/failed/latency, ingest received/validation-fail/duplicate, alerts created/acknowledged.
-
-## 13. Triển khai và vận hành
-
-Deploy ở đâu:
-- Triển khai bằng Docker Compose trên Linux/WSL server.
-
-Domain:
-- Dùng `CLOUDFLARE_PUBLIC_URL` nếu public qua Cloudflare Tunnel.
-- Quick tunnel dùng domain tạm `*.trycloudflare.com`.
-
-Reverse proxy / Cloudflare / Nginx:
-- Cloudflare Tunnel là lựa chọn chính trong repo hiện tại.
-- Nginx có cấu hình mẫu tại `nginx/nginx.conf` nếu muốn đặt reverse proxy riêng.
-
-Backup, restore:
+Backup:
 
 ```bash
-./scripts/backup.sh
-./scripts/restore.sh backups/<backup-file>.tar.gz
+bash scripts/backup.sh
 ```
 
-Update version:
+Restore:
 
 ```bash
-git pull
-docker compose up -d --build
-# production:
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+bash scripts/restore.sh backups/<backup-file>.tar.gz --force
 ```
 
-## 14. Các lỗi thường gặp và cách xử lý
+Monitor:
 
-Port bị chiếm:
-- Triệu chứng: container không bind được cổng.
-- Cách xử lý: đổi `BACKEND_HOST_PORT`/`MONGO_HOST_PORT` trong `.env`, chạy lại compose.
+```bash
+bash scripts/monitor.sh
+```
 
-Lỗi kết nối DB:
-- Triệu chứng: `/health` báo `database: disconnected`.
-- Cách xử lý: kiểm tra credentials Mongo, container `mongodb` healthy, URI kết nối đúng.
+Cloudflare:
 
-Lỗi cấu hình env:
-- Triệu chứng: `401 Invalid or missing API key`, hoặc ESP token invalid.
-- Cách xử lý: đồng bộ key/token, kiểm tra `.env`, rotate lại ESP token nếu cần.
+```bash
+docker compose --profile cloudflare up -d cloudflared
+docker compose --profile cloudflare-quick up -d cloudflared-quick
+```
 
-Lỗi container:
-- Triệu chứng: `unhealthy`, restart loop.
-- Cách xử lý: kiểm tra `docker compose logs`, healthcheck, tài nguyên CPU/RAM/disk.
+## 16. Smoke test
 
-Lỗi permission:
-- Triệu chứng: script backup/restore không chạy.
-- Cách xử lý: `chmod +x scripts/*.sh`, kiểm tra quyền chạy Docker.
+Server hien tai da co du lieu demo, nen co the smoke test bang login that.
 
-Lỗi WSL/dev environment nếu có:
-- Triệu chứng: network/localhost không ổn định, hiệu năng I/O chậm.
-- Cách xử lý: chạy command trong cùng môi trường WSL, kiểm tra Docker Desktop WSL integration.
+Vi du voi owner demo tren local port `18000`:
 
-## 15. Đánh giá và đề xuất
+```bash
+curl -X POST http://127.0.0.1:18000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone_number": "+84911100401",
+    "password": "OwnerPass401!"
+  }'
+```
 
-Ưu điểm hiện tại:
-- Kiến trúc tách lớp khá rõ (api/service/db/models/utils).
-- Hỗ trợ đầy đủ ingest + ECG on-demand queue polling.
-- Có index, TTL, readiness, JWT/RBAC + refresh/revoke session, request ID, metrics domain, recovery loop cho command queue, rate-limit Redis-backed.
-- Có script vận hành (backup/restore/monitor/deploy cloudflare).
+Sau khi lay access token, test:
 
-Hạn chế:
-- Queue vẫn dùng Mongo polling nên hợp với small/medium scale hơn broker chuyên dụng.
-- Dashboard/alerting hạ tầng vẫn cần triển khai ngoài repo.
-- Chưa có integration test Mongo/Redis thật trong CI mặc định.
+- `GET /api/v1/me/devices`
+- `GET /api/v1/devices/dev-shared-401/latest`
+- `GET /api/v1/devices/dev-shared-401/ecg`
+- `GET /api/v1/devices/dev-shared-401/alerts`
 
-Hướng cải tiến sau này:
-1. Mở rộng test integration với Mongo/Redis thật trong CI.
-2. Bổ sung alerting/dashboard production cho metrics và audit log.
-3. Cân nhắc broker riêng nếu queue command tăng tải mạnh.
-4. Chuẩn hóa runbook production cho backup/restore/disaster recovery.
-5. Bổ sung session/device admin tooling như revoke-all-sessions hoặc MFA cho admin.
+**Luu y:** `scripts/smoke-api.sh` hien van dung payload login kieu `user_id`, nen chua dong bo hoan toan voi auth flow hien tai cua server.
+
+## 17. Tai lieu lien quan
+
+- `docs/app-api.md`
+- `docs/app_server_contract.md`
+- `docs/me-devices-contract.md`
+- `.env.example`
+- `docker-compose.yml`
+- `backend/app/*`
+
+## 18. Ghi chu cho team
+
+- Neu lam app moi, hay uu tien nhom route `/api/v1/me/devices` va `/api/v1/devices/...`
+- Neu lam firmware, bam sat nhom `/api/v1/esp/*`
+- Neu lam admin tooling, dung admin JWT cho van hanh hang ngay
+- Chi mo `ALLOW_ADMIN_API_KEY_BOOTSTRAP=true` trong thoi gian bootstrap co kiem soat
+- Neu can reset lai du lieu demo, backup truoc roi moi xoa MongoDB
