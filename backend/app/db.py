@@ -1723,6 +1723,43 @@ class Database:
             logger.error("User threshold update error: %s", exc)
             return False
 
+    async def update_user_profile(self, user_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update current user profile fields and return a sanitized document."""
+        if self.users is None:
+            raise RuntimeError("Users collection not initialized")
+        payload = {}
+        if "name" in fields:
+            payload["name"] = fields["name"]
+        if "date_of_birth" in fields:
+            payload["date_of_birth"] = fields["date_of_birth"]
+        payload["updated_at"] = datetime.utcnow()
+        try:
+            doc = await self.users.find_one_and_update(
+                {"user_id": user_id},
+                {"$set": payload},
+                return_document=ReturnDocument.AFTER,
+            )
+            if not doc:
+                return None
+            return self._serialize_doc(doc)
+        except Exception as exc:
+            logger.error("User profile update error: %s", exc)
+            raise
+
+    async def update_user_password_hash(self, user_id: str, password_hash: str) -> bool:
+        """Update one user's password hash and last-updated timestamp."""
+        if self.users is None:
+            raise RuntimeError("Users collection not initialized")
+        try:
+            result = await self.users.update_one(
+                {"user_id": user_id},
+                {"$set": {"password_hash": password_hash, "updated_at": datetime.utcnow()}},
+            )
+            return result.matched_count > 0
+        except Exception as exc:
+            logger.error("User password update error: %s", exc)
+            raise
+
     async def insert_audit_log(self, doc: Dict[str, Any]) -> bool:
         """Persist one audit log record."""
         if self.audit_logs is None:
@@ -1842,6 +1879,36 @@ class Database:
         except Exception as exc:
             logger.error("Auth session revoke error: %s", exc)
             return False
+
+    async def revoke_user_other_auth_sessions(
+        self,
+        user_id: str,
+        keep_session_id: str,
+        reason: str,
+        revoked_by: Optional[str] = None,
+    ) -> int:
+        """Revoke all active sessions for a user except one session to keep."""
+        if self.auth_sessions is None:
+            return 0
+        try:
+            result = await self.auth_sessions.update_many(
+                {
+                    "user_id": user_id,
+                    "session_id": {"$ne": keep_session_id},
+                    "revoked_at": {"$exists": False},
+                },
+                {
+                    "$set": {
+                        "revoked_at": datetime.utcnow(),
+                        "revoked_reason": reason,
+                        "revoked_by": revoked_by,
+                    }
+                },
+            )
+            return int(result.modified_count)
+        except Exception as exc:
+            logger.error("Auth sessions bulk revoke error: %s", exc)
+            return 0
 
     async def count_pending_commands(self) -> int:
         """Return current queue backlog for metrics and monitoring."""

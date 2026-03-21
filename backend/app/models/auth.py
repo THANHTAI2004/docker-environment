@@ -37,6 +37,18 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(..., min_length=32)
 
 
+class UpdateProfileRequest(BaseModel):
+    """Payload to update the current authenticated user profile."""
+    name: str = Field(..., min_length=2, max_length=100)
+    date_of_birth: date
+
+
+class ChangePasswordRequest(BaseModel):
+    """Payload to rotate the current authenticated user's password."""
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8)
+
+
 class LogoutResponse(BaseModel):
     """Response returned after a successful logout."""
     status: str = "success"

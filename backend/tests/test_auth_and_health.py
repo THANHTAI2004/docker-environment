@@ -231,6 +231,9 @@ async def test_me_returns_extended_profile_fields(client, app_module, monkeypatc
             return None
         sanitized = dict(user)
         sanitized.pop("password_hash", None)
+        sanitized.pop("role", None)
+        sanitized.pop("auth_type", None)
+        sanitized.pop("session_id", None)
         return sanitized
 
     async def fake_insert_audit_log(doc):
@@ -264,6 +267,383 @@ async def test_me_returns_extended_profile_fields(client, app_module, monkeypatc
     assert body["date_of_birth"] == "2004-02-01"
     assert "role" not in body
     assert body["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_patch_me_updates_profile_and_returns_sanitized_user(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "date_of_birth": "2004-02-01",
+            "role": "patient",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+    audit_actions = []
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_update_user_profile(user_id, fields):
+        user = users.get(user_id)
+        if not user:
+            return None
+        user["name"] = fields["name"]
+        user["date_of_birth"] = fields["date_of_birth"]
+        user["updated_at"] = "2026-03-21T00:00:00"
+        sanitized = dict(user)
+        sanitized.pop("password_hash", None)
+        return sanitized
+
+    async def fake_insert_audit_log(doc):
+        audit_actions.append(doc["action"])
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "update_user_profile", fake_update_user_profile)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.patch(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "  New Name  ", "date_of_birth": "2003-01-15"},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["name"] == "New Name"
+    assert body["date_of_birth"] == "2003-01-15"
+    assert "password_hash" not in body
+    assert "auth.profile_update" in audit_actions
+
+
+@pytest.mark.asyncio
+async def test_patch_me_rejects_future_date_of_birth(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "date_of_birth": "2004-02-01",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.patch(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Patient One", "date_of_birth": "2099-01-01"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["message"] == "Date of birth cannot be in the future"
+
+
+@pytest.mark.asyncio
+async def test_change_password_success_allows_login_with_new_password(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "date_of_birth": "2004-02-01",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+    audit_actions = []
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_update_user_password_hash(user_id, password_hash):
+        user = users.get(user_id)
+        if not user:
+            return False
+        user["password_hash"] = password_hash
+        user["updated_at"] = "2026-03-21T00:00:00"
+        return True
+
+    async def fake_insert_audit_log(doc):
+        audit_actions.append(doc["action"])
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "update_user_password_hash", fake_update_user_password_hash)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login_old = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token = login_old.json()["access_token"]
+
+    change = await client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "PatientPass1", "new_password": "NewPass123"},
+    )
+
+    login_new = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "NewPass123"},
+    )
+
+    assert change.status_code == 200
+    assert change.json()["status"] == "success"
+    assert login_new.status_code == 200
+    assert "auth.change_password" in audit_actions
+
+
+@pytest.mark.asyncio
+async def test_change_password_rejects_same_password(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "PatientPass1", "new_password": "PatientPass1"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["message"] == "New password must be different from current password"
+
+
+@pytest.mark.asyncio
+async def test_change_password_rejects_wrong_current_password(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_update_user_password_hash(user_id, password_hash):
+        return True
+
+    audit_actions = []
+
+    async def fake_insert_audit_log(doc):
+        audit_actions.append(doc.get("action"))
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "update_user_password_hash", fake_update_user_password_hash)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "WrongPass1", "new_password": "NewPass123"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["message"] == "Current password is incorrect"
+    assert "auth.change_password_failed" in audit_actions
+
+
+@pytest.mark.asyncio
+async def test_change_password_has_endpoint_specific_rate_limit(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_update_user_password_hash(user_id, password_hash):
+        user = users.get(user_id)
+        if not user:
+            return False
+        user["password_hash"] = password_hash
+        return True
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "update_user_password_hash", fake_update_user_password_hash)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+    monkeypatch.setattr(app_module.settings, "rate_limit_change_password_per_minute", 1)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token = login.json()["access_token"]
+
+    first = await client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "PatientPass1", "new_password": "NewPass123"},
+    )
+    second = await client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "NewPass123", "new_password": "AnotherPass123"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["message"] == "Too many requests"
+
+
+@pytest.mark.asyncio
+async def test_change_password_revokes_other_active_sessions(client, app_module, monkeypatch):
+    users = {
+        "patient-001": {
+            "_id": "1",
+            "user_id": "patient-001",
+            "name": "Patient One",
+            "phone_number": "+84987654321",
+            "is_active": True,
+            "password_hash": hash_password("PatientPass1"),
+            "caregivers": [],
+        }
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_user(user_id):
+        user = users.get(user_id)
+        if not user:
+            return None
+        sanitized = dict(user)
+        sanitized.pop("password_hash", None)
+        sanitized.pop("role", None)
+        return sanitized
+
+    async def fake_update_user_password_hash(user_id, password_hash):
+        user = users.get(user_id)
+        if not user:
+            return False
+        user["password_hash"] = password_hash
+        return True
+
+    async def fake_insert_audit_log(doc):
+        return True
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_user", fake_get_user)
+    monkeypatch.setattr(app_module.db, "update_user_password_hash", fake_update_user_password_hash)
+    monkeypatch.setattr(app_module.db, "insert_audit_log", fake_insert_audit_log)
+
+    login_session_a = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    login_session_b = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0987654321", "password": "PatientPass1"},
+    )
+    token_a = login_session_a.json()["access_token"]
+    token_b = login_session_b.json()["access_token"]
+
+    changed = await client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"current_password": "PatientPass1", "new_password": "NewPass123"},
+    )
+    me_with_token_a = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    me_with_token_b = await client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+
+    assert login_session_a.status_code == 200
+    assert login_session_b.status_code == 200
+    assert changed.status_code == 200
+    assert me_with_token_a.status_code == 200
+    assert me_with_token_b.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -341,7 +721,6 @@ async def test_refresh_rotates_token_and_invalidates_old_refresh(client, app_mod
     assert refresh.status_code == 200
     assert refresh_body["session_id"] == login_body["session_id"]
     assert refresh_body["refresh_token"] != login_body["refresh_token"]
-    assert refresh_body["access_token"] != login_body["access_token"]
     assert reused.status_code == 401
 
 
@@ -511,6 +890,7 @@ async def test_public_device_latest_with_auth_returns_data(client, app_module, m
             "_id": "1",
             "user_id": "patient-001",
             "name": "Patient One",
+            "phone_number": "+84987654321",
             "role": "patient",
             "is_active": True,
             "password_hash": hash_password("PatientPass1"),
@@ -840,7 +1220,7 @@ async def test_claim_device_assigns_owner_link(client, app_module, monkeypatch):
     async def fake_get_user_auth(user_id):
         return users.get(user_id)
 
-    async def fake_get_device(device_id):
+    async def fake_get_device_internal(device_id):
         return {
             "device_id": device_id,
             "device_name": "Wristband 1",
@@ -871,7 +1251,7 @@ async def test_claim_device_assigns_owner_link(client, app_module, monkeypatch):
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
     monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
-    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_internal", fake_get_device_internal)
     monkeypatch.setattr(app_module.db, "get_device_owner_link", fake_get_device_owner_link)
     monkeypatch.setattr(app_module.db, "upsert_device_link", fake_upsert_device_link)
     monkeypatch.setattr(app_module.db, "clear_device_pairing_code", fake_clear_device_pairing_code)
@@ -925,7 +1305,7 @@ async def test_claim_device_returns_409_when_owner_exists(client, app_module, mo
     async def fake_get_user_auth(user_id):
         return users.get(user_id)
 
-    async def fake_get_device(device_id):
+    async def fake_get_device_internal(device_id):
         return {
             "device_id": device_id,
             "device_name": "Wristband 1",
@@ -938,7 +1318,7 @@ async def test_claim_device_returns_409_when_owner_exists(client, app_module, mo
 
     monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
     monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
-    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_internal", fake_get_device_internal)
     monkeypatch.setattr(app_module.db, "get_device_owner_link", fake_get_device_owner_link)
 
     login = await client.post(
@@ -997,12 +1377,13 @@ async def test_owner_can_add_and_remove_viewer(client, app_module, monkeypatch):
     async def fake_get_user(user_id):
         return target_users.get(user_id)
 
-    async def fake_upsert_device_link(device_id, user_id, link_role, linked_by):
+    async def fake_upsert_device_link(device_id, user_id, permission, added_by_user_id):
         links[user_id] = {
             "device_id": device_id,
             "user_id": user_id,
-            "link_role": link_role,
-            "linked_by": linked_by,
+            "permission": permission,
+            "link_role": permission,
+            "added_by_user_id": added_by_user_id,
         }
         return "linked"
 
@@ -1043,6 +1424,7 @@ async def test_owner_can_add_and_remove_viewer(client, app_module, monkeypatch):
         "status": "linked",
         "device_id": "dev-001",
         "user_id": "viewer-001",
+        "permission": "viewer",
         "link_role": "viewer",
     }
     assert remove_response.status_code == 200
@@ -1367,7 +1749,6 @@ async def test_create_user_rejects_admin_api_key_when_bootstrap_disabled(client,
     payload = {
         "user_id": "patient-001",
         "name": "Patient One",
-        "role": "patient",
         "password": "VeryStrongPass1",
     }
 

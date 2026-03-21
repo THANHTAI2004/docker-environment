@@ -84,6 +84,11 @@ AUTH_REVOKED_SESSIONS_TOTAL = Counter(
     "Revoked auth sessions",
     ["reason"],
 )
+AUTH_CHANGE_PASSWORD_TOTAL = Counter(
+    "wearable_auth_change_password_total",
+    "Change-password attempts",
+    ["outcome"],
+)
 ESP_READINGS_RECEIVED_TOTAL = Counter(
     "wearable_esp_readings_received_total",
     "ESP readings received by ingest API",

@@ -6,8 +6,14 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..db import db
-from ..models import PhoneLoginRequest, RefreshRequest, RegisterRequest
-from ..observability import AUTH_LOGIN_TOTAL, AUTH_REVOKED_SESSIONS_TOTAL
+from ..models import (
+    ChangePasswordRequest,
+    PhoneLoginRequest,
+    RefreshRequest,
+    RegisterRequest,
+    UpdateProfileRequest,
+)
+from ..observability import AUTH_CHANGE_PASSWORD_TOTAL, AUTH_LOGIN_TOTAL, AUTH_REVOKED_SESSIONS_TOTAL
 from ..utils.auth import (
     hash_password,
     issue_session_tokens,
@@ -156,3 +162,145 @@ async def get_me(current_user: dict = Depends(require_current_user)):
     if not sanitized:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return sanitized
+
+
+@router.patch("/me")
+async def update_me(
+    payload: UpdateProfileRequest,
+    request: Request,
+    current_user: dict = Depends(require_current_user),
+):
+    """Update the current authenticated user profile fields."""
+    name = payload.name.strip()
+    if len(name) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Name must be at least 2 characters after trimming",
+        )
+    if payload.date_of_birth > date.today():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Date of birth cannot be in the future",
+        )
+
+    user_id = current_user["user_id"]
+    existing_user = await db.get_user_auth(user_id)
+    if not existing_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    try:
+        updated_user = await db.update_user_profile(
+            user_id,
+            {
+                "name": name,
+                "date_of_birth": payload.date_of_birth.isoformat(),
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update user profile",
+        ) from exc
+
+    if not updated_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    await db.insert_audit_log(
+        {
+            "action": "auth.profile_update",
+            "actor_id": user_id,
+            "actor_role": current_user.get("role"),
+            "target_id": user_id,
+            "request_id": request.state.request_id,
+        }
+    )
+    return updated_user
+
+
+@router.post("/change-password")
+async def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    current_user: dict = Depends(require_current_user),
+):
+    """Change the current authenticated user's password."""
+    user_id = current_user["user_id"]
+
+    async def _audit_failure(reason: str) -> None:
+        await db.insert_audit_log(
+            {
+                "action": "auth.change_password_failed",
+                "actor_id": user_id,
+                "actor_role": current_user.get("role"),
+                "target_id": user_id,
+                "request_id": request.state.request_id,
+                "reason": reason,
+            }
+        )
+
+    if not payload.current_password.strip():
+        AUTH_CHANGE_PASSWORD_TOTAL.labels(outcome="invalid_request").inc()
+        await _audit_failure("empty_current_password")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Current password is required",
+        )
+    if payload.new_password == payload.current_password:
+        AUTH_CHANGE_PASSWORD_TOTAL.labels(outcome="same_password").inc()
+        await _audit_failure("same_password")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from current password",
+        )
+
+    user_auth = await db.get_user_auth(user_id)
+    if not user_auth:
+        AUTH_CHANGE_PASSWORD_TOTAL.labels(outcome="user_not_found").inc()
+        await _audit_failure("user_not_found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if not verify_password(payload.current_password, user_auth.get("password_hash")):
+        AUTH_CHANGE_PASSWORD_TOTAL.labels(outcome="invalid_current_password").inc()
+        await _audit_failure("invalid_current_password")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
+
+    new_password_hash = hash_password(payload.new_password)
+    try:
+        updated = await db.update_user_password_hash(user_id, new_password_hash)
+    except Exception as exc:
+        AUTH_CHANGE_PASSWORD_TOTAL.labels(outcome="error").inc()
+        await _audit_failure("update_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update password",
+        ) from exc
+
+    if not updated:
+        AUTH_CHANGE_PASSWORD_TOTAL.labels(outcome="user_not_found").inc()
+        await _audit_failure("user_not_found_after_update")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    current_session_id = current_user.get("session_id")
+    revoked_other_sessions = 0
+    if current_session_id:
+        revoked_other_sessions = await db.revoke_user_other_auth_sessions(
+            user_id=user_id,
+            keep_session_id=current_session_id,
+            reason="Password changed",
+            revoked_by=user_id,
+        )
+
+    AUTH_CHANGE_PASSWORD_TOTAL.labels(outcome="success").inc()
+
+    await db.insert_audit_log(
+        {
+            "action": "auth.change_password",
+            "actor_id": user_id,
+            "actor_role": current_user.get("role"),
+            "target_id": user_id,
+            "request_id": request.state.request_id,
+            "details": {
+                "revoked_other_sessions": revoked_other_sessions,
+            },
+        }
+    )
+    return {"status": "success"}

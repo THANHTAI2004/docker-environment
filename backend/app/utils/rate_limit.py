@@ -68,13 +68,18 @@ class RateLimiter:
         if path in {"/health", "/live", "/ready", "/metrics"}:
             return True, 0, "system"
 
-        category = "esp" if path.startswith("/api/v1/esp/") else "general"
-        identity = self._device_identity(request) if category == "esp" else self._general_identity(request)
-        limit = (
-            settings.rate_limit_esp_per_minute
-            if category == "esp"
-            else settings.rate_limit_general_per_minute
-        )
+        if path == "/api/v1/auth/change-password":
+            category = "auth_change_password"
+            identity = self._general_identity(request)
+            limit = settings.rate_limit_change_password_per_minute
+        elif path.startswith("/api/v1/esp/"):
+            category = "esp"
+            identity = self._device_identity(request)
+            limit = settings.rate_limit_esp_per_minute
+        else:
+            category = "general"
+            identity = self._general_identity(request)
+            limit = settings.rate_limit_general_per_minute
 
         now_min = int(time.time() // 60)
         if self._redis is not None:

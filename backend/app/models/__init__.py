@@ -15,7 +15,9 @@ from .device import (
 from .link import DeviceCaregiverRequest, DeviceLink, DeviceLinkDB, DeviceLinkRequest, DeviceViewerRequest
 from .user import User, UserDB, UserCreate, ThresholdsUpdate, AlertThresholds
 from .auth import (
+    ChangePasswordRequest,
     AuthenticatedUser,
+    UpdateProfileRequest,
     LogoutResponse,
     PhoneLoginRequest,
     RefreshRequest,
@@ -49,6 +51,8 @@ __all__ = [
     "ThresholdsUpdate",
     "AlertThresholds",
     "AuthenticatedUser",
+    "UpdateProfileRequest",
+    "ChangePasswordRequest",
     "RegisterRequest",
     "PhoneLoginRequest",
     "RefreshRequest",

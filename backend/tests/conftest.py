@@ -53,6 +53,21 @@ def app_module(monkeypatch):
         session["revoked_by"] = revoked_by
         return True
 
+    async def revoke_user_other_auth_sessions(user_id, keep_session_id, reason, revoked_by=None):
+        modified_count = 0
+        for session in sessions.values():
+            if session.get("user_id") != user_id:
+                continue
+            if session.get("session_id") == keep_session_id:
+                continue
+            if session.get("revoked_at") is not None:
+                continue
+            session["revoked_at"] = _db_now()
+            session["revoked_reason"] = reason
+            session["revoked_by"] = revoked_by
+            modified_count += 1
+        return modified_count
+
     monkeypatch.setattr(main.db, "connect", lambda: None)
     monkeypatch.setattr(main.db, "create_indexes", noop_async)
     monkeypatch.setattr(main.rate_limiter, "connect", noop_async)
@@ -65,6 +80,7 @@ def app_module(monkeypatch):
     monkeypatch.setattr(main.db, "get_auth_session_by_refresh_token_hash", get_auth_session_by_refresh_token_hash)
     monkeypatch.setattr(main.db, "rotate_auth_session", rotate_auth_session)
     monkeypatch.setattr(main.db, "revoke_auth_session", revoke_auth_session)
+    monkeypatch.setattr(main.db, "revoke_user_other_auth_sessions", revoke_user_other_auth_sessions)
     return main
 
 

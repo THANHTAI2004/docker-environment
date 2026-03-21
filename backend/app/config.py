@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     rate_limit_storage: str = "redis"
     rate_limit_general_per_minute: int = 300
     rate_limit_esp_per_minute: int = 1200
+    rate_limit_change_password_per_minute: int = 5
     redis_url: str = "redis://redis:6379/0"
     expose_error_details: bool = False
     expose_api_docs: bool = False
