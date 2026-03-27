@@ -230,6 +230,7 @@ ESP token va pairing code deu chi luu hash trong MongoDB.
 - `GET /api/v1/devices/{device_id}/viewers`
 - `GET /api/v1/devices/{device_id}/linked-users`
 - `DELETE /api/v1/devices/{device_id}/viewers/{user_id}`
+- `GET /api/v1/devices/{device_id}/thresholds`
 - `PATCH /api/v1/devices/{device_id}/thresholds`
 - `POST /api/v1/devices/{device_id}/esp-token`
 
@@ -261,7 +262,9 @@ ESP token va pairing code deu chi luu hash trong MongoDB.
 - `rr_low`
 - `rr_high`
 
-Backend luu dong thoi vao `settings.alert_thresholds` va `alert_thresholds` tren document device.
+Backend merge payload moi vao custom thresholds hien co, roi luu dong thoi vao `settings.alert_thresholds` va `alert_thresholds` tren document device.
+
+`GET /api/v1/devices/{device_id}/thresholds` tra ve bo nguong hieu luc day du sau khi merge default thresholds voi custom thresholds cua device, de app mo lai van doc dung state tu server.
 
 Push notification flow hien tai:
 

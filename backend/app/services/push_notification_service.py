@@ -178,6 +178,7 @@ class PushNotificationService:
     def _build_data(self, alert: Dict[str, Any], device: Optional[Dict[str, Any]]) -> Dict[str, str]:
         """Build FCM data payload for in-app routing."""
         payload = {
+            "type": "health_alert",
             "alert_id": str(alert.get("id") or alert.get("_id") or ""),
             "device_id": str(alert.get("device_id") or ""),
             "device_name": str((device or {}).get("device_name") or ""),

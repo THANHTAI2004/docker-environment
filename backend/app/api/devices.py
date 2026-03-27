@@ -30,6 +30,7 @@ from ..utils.auth import (
     verify_pairing_code,
 )
 from ..config import settings
+from ..services.alert_service import alert_service
 
 router = APIRouter(prefix="/api/v1", tags=["devices"])
 logger = logging.getLogger(__name__)
@@ -358,6 +359,26 @@ async def get_device(device_id: str, current_user: dict = Depends(require_curren
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
     return filter_device_response(device, current_user)
+
+
+@router.get("/devices/{device_id}/thresholds")
+async def get_device_thresholds(
+    device_id: str,
+    current_user: dict = Depends(require_current_user),
+):
+    """Return the effective thresholds currently applied to one device."""
+    device = await require_device_read_access(current_user, device_id)
+    device_thresholds = None
+    device_settings = device.get("settings") or {}
+    if isinstance(device_settings, dict):
+        device_thresholds = device_settings.get("alert_thresholds")
+    if device_thresholds is None:
+        device_thresholds = device.get("alert_thresholds")
+    return {
+        "device_id": device_id,
+        "thresholds": alert_service.resolve_thresholds(device_thresholds),
+    }
+
 
 @router.patch("/devices/{device_id}/thresholds")
 async def update_device_thresholds(

@@ -42,7 +42,7 @@ class AlertService:
         Returns a list of newly generated alert documents.
         """
         alerts: list[Dict[str, Any]] = []
-        thresholds = self._normalize_thresholds(device_thresholds)
+        thresholds = self.resolve_thresholds(device_thresholds)
 
         device_id = reading.get("device_id")
         timestamp = reading.get("timestamp", time.time())
@@ -250,6 +250,10 @@ class AlertService:
                 inserted_alerts.append(stored_alert)
 
         return inserted_alerts
+
+    def resolve_thresholds(self, device_thresholds: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Return the effective threshold set for one device."""
+        return self._normalize_thresholds(device_thresholds)
 
     def _normalize_thresholds(self, user_thresholds: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Merge user thresholds over defaults and return a plain dict."""

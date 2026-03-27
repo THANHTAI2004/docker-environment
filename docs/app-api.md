@@ -205,8 +205,38 @@ Chi `owner` moi duoc sua. Payload dung field phang:
 
 Ghi chu:
 - app co the gui mot phan payload, khong can day du tat ca field
+- backend merge payload moi vao custom thresholds hien co, khong ghi mat cac field khac
 - backend luu vao document device o ca `settings.alert_thresholds` va `alert_thresholds`
 - reading moi tu ESP se dung nguong moi nay de sinh alert
+
+### Doc nguong hien tai
+
+`GET /api/v1/devices/{device_id}/thresholds`
+
+Response:
+
+```json
+{
+  "device_id": "dev-001",
+  "thresholds": {
+    "spo2_low": 92,
+    "spo2_critical": 85,
+    "temp_high": 38.0,
+    "temp_critical": 39.5,
+    "temp_low": 35.5,
+    "hr_low": 50,
+    "hr_low_critical": 40,
+    "hr_high": 115,
+    "hr_critical": 150,
+    "rr_low": 10,
+    "rr_high": 25
+  }
+}
+```
+
+Ghi chu:
+- response tra ve bo nguong hieu luc day du sau khi merge default thresholds voi custom thresholds cua device
+- `owner` va `viewer` deu doc duoc neu dang con linked voi device
 
 ### Chi so moi nhat
 

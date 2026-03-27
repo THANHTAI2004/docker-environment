@@ -83,6 +83,74 @@ async def test_owner_can_update_device_thresholds_with_backend_field_names(clien
 
 
 @pytest.mark.asyncio
+async def test_linked_user_can_read_effective_device_thresholds(client, app_module, monkeypatch):
+    users = {
+        "viewer-001": {
+            "_id": "2",
+            "user_id": "viewer-001",
+            "name": "Viewer One",
+            "phone_number": "+84911110002",
+            "is_active": True,
+            "password_hash": hash_password("ViewerPass123"),
+            "caregivers": [],
+        }
+    }
+    device_state = {
+        "device_id": "dev-001",
+        "device_name": "Wrist 1",
+        "device_type": "wrist",
+        "settings": {"alert_thresholds": {"spo2_low": 92.0, "hr_high": 115}},
+        "alert_thresholds": {"spo2_low": 88.0, "hr_high": 140},
+    }
+
+    async def fake_get_user_auth(user_id):
+        return users.get(user_id)
+
+    async def fake_get_device(device_id):
+        return device_state if device_id == "dev-001" else None
+
+    async def fake_get_device_link(device_id, user_id):
+        if device_id == "dev-001" and user_id == "viewer-001":
+            return {"device_id": device_id, "user_id": user_id, "link_role": "viewer"}
+        return None
+
+    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
+    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
+    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"phone_number": "0911110002", "password": "ViewerPass123"},
+    )
+    token = login.json()["access_token"]
+
+    response = await client.get(
+        "/api/v1/devices/dev-001/thresholds",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert login.status_code == 200
+    assert response.status_code == 200
+    assert response.json() == {
+        "device_id": "dev-001",
+        "thresholds": {
+            "spo2_low": 92.0,
+            "spo2_critical": 85.0,
+            "temp_high": 38.0,
+            "temp_critical": 39.5,
+            "temp_low": 35.5,
+            "hr_low": 50,
+            "hr_low_critical": 40,
+            "hr_high": 115,
+            "hr_critical": 150,
+            "rr_low": 10,
+            "rr_high": 25,
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_register_push_token_for_current_user(client, app_module, monkeypatch):
     users = {
         "user-001": {

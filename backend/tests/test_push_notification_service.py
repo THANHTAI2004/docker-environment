@@ -133,5 +133,6 @@ async def test_push_notification_is_sent_when_alert_escalates(monkeypatch):
     assert result["status"] == "sent"
     assert captured["dispatch"]["tokens"] == ["token-001"]
     assert captured["dispatch"]["title"] == "CRITICAL: Shared Wrist 401"
+    assert captured["dispatch"]["data"]["type"] == "health_alert"
     assert captured["dispatch"]["data"]["alert_type"] == "hr_high"
     assert captured["status_updates"][-1]["fields"]["push_status"] == "sent"

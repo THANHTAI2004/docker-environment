@@ -869,16 +869,35 @@ class Database:
             return False
 
     async def update_device_thresholds(self, device_id: str, thresholds: Dict[str, Any]) -> bool:
-        """Update alert thresholds stored directly on a device."""
+        """Merge and update alert thresholds stored directly on a device."""
         if self.devices is None:
             return False
         try:
+            existing = await self.devices.find_one(
+                {"device_id": device_id},
+                {"settings.alert_thresholds": 1, "alert_thresholds": 1},
+            )
+            if not existing:
+                return False
+
+            merged_thresholds: Dict[str, Any] = {}
+            legacy_thresholds = existing.get("alert_thresholds")
+            if isinstance(legacy_thresholds, dict):
+                merged_thresholds.update(legacy_thresholds)
+
+            settings_block = existing.get("settings")
+            if isinstance(settings_block, dict):
+                settings_thresholds = settings_block.get("alert_thresholds")
+                if isinstance(settings_thresholds, dict):
+                    merged_thresholds.update(settings_thresholds)
+
+            merged_thresholds.update(thresholds)
             result = await self.devices.update_one(
                 {"device_id": device_id},
                 {
                     "$set": {
-                        "settings.alert_thresholds": thresholds,
-                        "alert_thresholds": thresholds,
+                        "settings.alert_thresholds": merged_thresholds,
+                        "alert_thresholds": merged_thresholds,
                         "last_seen": datetime.utcnow(),
                     }
                 },
