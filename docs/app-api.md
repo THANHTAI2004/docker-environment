@@ -197,9 +197,7 @@ Chi `owner` moi duoc sua. Payload dung field phang:
   "hr_low": 52,
   "hr_low_critical": 42,
   "hr_high": 115,
-  "hr_critical": 145,
-  "rr_low": 11,
-  "rr_high": 24
+  "hr_critical": 145
 }
 ```
 
@@ -227,9 +225,7 @@ Response:
     "hr_low": 50,
     "hr_low_critical": 40,
     "hr_high": 115,
-    "hr_critical": 150,
-    "rr_low": 10,
-    "rr_high": 25
+    "hr_critical": 150
   }
 }
 ```
@@ -244,8 +240,9 @@ Ghi chu:
 
 Truong chinh:
 - `timestamp`
+- `fall`
+- `fall_phase`
 - `vitals.heart_rate`
-- `vitals.respiratory_rate`
 - `vitals.spo2`
 - `vitals.temperature`
 - `metadata.battery_level`
@@ -285,13 +282,51 @@ Response:
     "spo2": { "avg": 98.0, "min": 98.0, "max": 98.0 },
     "temperature": { "avg": 36.7, "min": 36.7, "max": 36.7 },
     "heart_rate": { "avg": 78.0, "min": 78, "max": 78 },
-    "respiratory_rate": { "avg": 16.0, "min": 16, "max": 16 }
+    "fall_count": 1
   },
   "total_readings": 1,
   "reading_density_per_hour": 0.04,
   "clock_skew_tolerance_seconds": 300
 }
 ```
+
+### ESP payload co ho tro fall detection
+
+`POST /api/v1/esp/devices/{device_id}/readings`
+
+Payload vi du:
+
+```json
+{
+  "timestamp": 1712345678.123,
+  "device_type": "chest",
+  "fall": false,
+  "fall_phase": "IDLE",
+  "vitals": {
+    "heart_rate": 72,
+    "spo2": 98,
+    "temperature": 36.7
+  },
+  "ecg": {
+    "waveform": [0.01, 0.02, 0.01],
+    "sampling_rate": 250,
+    "quality": "good",
+    "lead_off": false,
+    "ecg_hr": 71
+  },
+  "metadata": {
+    "battery_level": 95,
+    "signal_strength": -62,
+    "signal_quality": 84,
+    "upload_reason": "routine",
+    "firmware_version": "esp32-s3-gateway-nimble-v1"
+  }
+}
+```
+
+Ghi chu:
+- backend bo qua `respiratory_rate`
+- khi `fall=true`, backend tao alert `fall_detected` muc `critical` va day push neu user da dang ky FCM token
 
 ### Alias giu tuong thich nguoc
 

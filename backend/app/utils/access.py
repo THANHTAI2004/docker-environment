@@ -6,6 +6,7 @@ from typing import Any, Dict
 from fastapi import HTTPException, status
 
 from ..db import db
+from .thresholds import sanitize_device_thresholds
 
 
 def _link_permission(link: Dict[str, Any] | None) -> str | None:
@@ -108,8 +109,16 @@ async def require_alert_owner_access(principal: Dict[str, Any], alert_id: str) -
 def filter_device_response(device: Dict[str, Any], principal: Dict[str, Any]) -> Dict[str, Any]:
     """Hide device-internal fields from non-admin callers."""
     settings = device.get("settings")
-    if not settings and device.get("alert_thresholds") is not None:
-        settings = {"alert_thresholds": device.get("alert_thresholds")}
+    alert_thresholds = sanitize_device_thresholds(device.get("alert_thresholds"))
+    if isinstance(settings, dict):
+        settings = dict(settings)
+        settings_thresholds = sanitize_device_thresholds(settings.get("alert_thresholds"))
+        if settings_thresholds:
+            settings["alert_thresholds"] = settings_thresholds
+        else:
+            settings.pop("alert_thresholds", None)
+    if not settings and alert_thresholds:
+        settings = {"alert_thresholds": alert_thresholds}
     visible = {
         "device_id": device.get("device_id"),
         "device_type": device.get("device_type"),
@@ -120,7 +129,7 @@ def filter_device_response(device: Dict[str, Any], principal: Dict[str, Any]) ->
         "status": device.get("status"),
         "owner_user_id": device.get("owner_user_id"),
         "settings": settings,
-        "alert_thresholds": device.get("alert_thresholds"),
+        "alert_thresholds": alert_thresholds or None,
     }
     if principal.get("is_system_admin"):
         if "metadata" in device:

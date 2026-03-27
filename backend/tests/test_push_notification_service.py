@@ -1,9 +1,24 @@
 import importlib
+import json
 
 import pytest
 
 
 push_service_module = importlib.import_module("app.services.push_notification_service")
+
+
+def test_service_account_info_normalizes_private_key_newlines():
+    info = push_service_module.push_notification_service._load_service_account_info(
+        json.dumps(
+            {
+                "type": "service_account",
+                "project_id": "eldercare-c2dc9",
+                "private_key": "-----BEGIN PRIVATE KEY-----\\nabc123\\n-----END PRIVATE KEY-----\\n",
+            }
+        )
+    )
+
+    assert info["private_key"] == "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----\n"
 
 
 @pytest.mark.asyncio
@@ -124,7 +139,7 @@ async def test_push_notification_is_sent_when_alert_escalates(monkeypatch):
             "alert_type": "hr_high",
             "severity": "critical",
             "metric": "heart_rate",
-            "message": "Heart rate critically high (170 bpm)",
+            "message": "Nhịp tim ở mức nguy hiểm (170 bpm)",
             "timestamp": 1771763000.12,
             "recipient_user_ids": ["owner-001"],
         }
@@ -132,7 +147,8 @@ async def test_push_notification_is_sent_when_alert_escalates(monkeypatch):
 
     assert result["status"] == "sent"
     assert captured["dispatch"]["tokens"] == ["token-001"]
-    assert captured["dispatch"]["title"] == "CRITICAL: Shared Wrist 401"
+    assert captured["dispatch"]["title"] == "Cảnh báo nhịp tim cao - Shared Wrist 401"
+    assert captured["dispatch"]["body"] == "Nhịp tim ở mức nguy hiểm (170 bpm)"
     assert captured["dispatch"]["data"]["type"] == "health_alert"
     assert captured["dispatch"]["data"]["alert_type"] == "hr_high"
     assert captured["status_updates"][-1]["fields"]["push_status"] == "sent"

@@ -78,10 +78,6 @@ class Settings(BaseSettings):
     hr_high_warning: int = 120
     hr_high_critical: int = 150
     
-    # Respiratory Rate
-    rr_low_warning: int = 10
-    rr_high_warning: int = 25
-    
     # ECG Quality Alerts
     ecg_quality_alert: bool = True
     ecg_lead_off_alert: bool = True

@@ -129,7 +129,7 @@ async def get_summary(
     spo2_values = [v for item in items if (v := get_vital(item, "spo2")) is not None]
     temp_values = [v for item in items if (v := get_vital(item, "temperature")) is not None]
     hr_values = [v for item in items if (v := get_vital(item, "heart_rate")) is not None]
-    rr_values = [v for item in items if (v := get_vital(item, "respiratory_rate")) is not None]
+    fall_count = sum(1 for item in items if item.get("fall") is True)
     
     return {
         "user_id": user_id,
@@ -138,7 +138,7 @@ async def get_summary(
             "spo2": calc_stats(spo2_values),
             "temperature": calc_stats(temp_values),
             "heart_rate": calc_stats(hr_values),
-            "respiratory_rate": calc_stats(rr_values)
+            "fall_count": fall_count,
         },
         "total_readings": len(items),
         "reading_density_per_hour": round(len(items) / (periods[period] / 3600), 2),

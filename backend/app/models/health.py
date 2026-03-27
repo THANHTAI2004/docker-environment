@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field
 class VitalsData(BaseModel):
     """Nested vitals object for new format."""
     heart_rate: Optional[int] = Field(None, ge=0, le=300, description="Heart rate bpm")
-    respiratory_rate: Optional[int] = Field(None, ge=0, le=60, description="Breaths per minute")
     spo2: Optional[float] = Field(None, ge=0, le=100, description="Blood oxygen saturation %")
     temperature: Optional[float] = Field(None, ge=30, le=45, description="Body temperature °C")
 
@@ -20,6 +19,7 @@ class MetadataInfo(BaseModel):
     signal_strength: Optional[int] = Field(None, description="WiFi RSSI (dBm)")
     signal_quality: Optional[int] = Field(None, ge=0, le=100, description="BLE/application quality score")
     firmware_version: Optional[str] = Field(None, description="Firmware version")
+    upload_reason: Optional[str] = Field(None, description="Why the firmware uploaded this reading")
 
 
 class ECGData(BaseModel):
@@ -52,8 +52,9 @@ class HealthReading(BaseModel):
     # DEPRECATED: Flat vitals fields (backward compatibility)
     spo2: Optional[float] = Field(None, ge=0, le=100, description="Blood oxygen saturation % (deprecated, use vitals.spo2)")
     temperature: Optional[float] = Field(None, ge=30, le=45, description="Body temperature °C (deprecated, use vitals.temperature)")
-    respiratory_rate: Optional[int] = Field(None, ge=0, le=60, description="Breaths per minute (deprecated, use vitals.respiratory_rate)")
     heart_rate: Optional[int] = Field(None, ge=0, le=300, description="Heart rate bpm (deprecated, use vitals.heart_rate)")
+    fall: Optional[bool] = Field(None, description="True when the device detected a fall")
+    fall_phase: Optional[str] = Field(None, max_length=64, description="Firmware-reported fall state")
     
     # ECG data (chest device only)
     ecg: Optional[ECGData] = None

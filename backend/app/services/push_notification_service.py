@@ -105,7 +105,7 @@ class PushNotificationService:
 
         device = await db.get_device(device_id)
         title = self._build_title(alert, device)
-        body = alert.get("message") or "Health alert detected"
+        body = alert.get("message") or "Phát hiện cảnh báo sức khỏe"
         data = self._build_data(alert, device)
 
         try:
@@ -167,13 +167,24 @@ class PushNotificationService:
 
     def _build_title(self, alert: Dict[str, Any], device: Optional[Dict[str, Any]]) -> str:
         """Build a compact notification title for one alert."""
-        severity = str(alert.get("severity") or "warning").upper()
         device_name = None
         if isinstance(device, dict):
             device_name = device.get("device_name") or device.get("device_id")
         if not device_name:
             device_name = alert.get("device_id") or "device"
-        return f"{severity}: {device_name}"
+        alert_type = str(alert.get("alert_type") or "")
+        titles = {
+            "fall_detected": "Cảnh báo té ngã",
+            "spo2_low": "Cảnh báo SpO2",
+            "temp_high": "Cảnh báo nhiệt độ cao",
+            "temp_low": "Cảnh báo nhiệt độ thấp",
+            "hr_high": "Cảnh báo nhịp tim cao",
+            "hr_low": "Cảnh báo nhịp tim thấp",
+            "ecg_lead_off": "Cảnh báo điện cực ECG",
+            "ecg_quality": "Cảnh báo tín hiệu ECG",
+        }
+        title = titles.get(alert_type) or self._severity_title(str(alert.get("severity") or "warning"))
+        return f"{title} - {device_name}"
 
     def _build_data(self, alert: Dict[str, Any], device: Optional[Dict[str, Any]]) -> Dict[str, str]:
         """Build FCM data payload for in-app routing."""
@@ -267,7 +278,9 @@ class PushNotificationService:
         credential = None
         if settings.fcm_service_account_json:
             try:
-                credential = credentials.Certificate(json.loads(settings.fcm_service_account_json))
+                credential = credentials.Certificate(
+                    self._load_service_account_info(settings.fcm_service_account_json)
+                )
             except json.JSONDecodeError as exc:
                 raise RuntimeError("FCM_SERVICE_ACCOUNT_JSON must be valid JSON") from exc
         elif settings.fcm_service_account_path:
@@ -278,6 +291,14 @@ class PushNotificationService:
         else:
             self._firebase_app = firebase_admin.initialize_app(options=options, name=app_name)
         return self._firebase_app, messaging
+
+    def _load_service_account_info(self, raw_json: str) -> Dict[str, Any]:
+        """Parse service-account JSON and normalize private-key newlines from env files."""
+        info = json.loads(raw_json)
+        private_key = info.get("private_key")
+        if isinstance(private_key, str) and "\\n" in private_key and "\n" not in private_key:
+            info["private_key"] = private_key.replace("\\n", "\n")
+        return info
 
     def _is_invalid_token_error(self, exception: Exception | None) -> bool:
         """Identify provider errors that mean a stored token should be deactivated."""
@@ -302,6 +323,15 @@ class PushNotificationService:
         if isinstance(cause_code, str) and cause_code:
             return cause_code.replace("messaging/", "")
         return type(exception).__name__
+
+    def _severity_title(self, severity: str) -> str:
+        """Localize generic notification titles by severity."""
+        titles = {
+            "critical": "Cảnh báo khẩn cấp",
+            "warning": "Cảnh báo sức khỏe",
+            "info": "Thông báo sức khỏe",
+        }
+        return titles.get(severity.lower(), "Cảnh báo sức khỏe")
 
 
 push_notification_service = PushNotificationService()

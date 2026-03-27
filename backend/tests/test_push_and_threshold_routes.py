@@ -71,12 +71,12 @@ async def test_owner_can_update_device_thresholds_with_backend_field_names(clien
     response = await client.patch(
         "/api/v1/devices/dev-001/thresholds",
         headers={"Authorization": f"Bearer {token}"},
-        json={"spo2_low": 92.0, "hr_high": 115, "rr_low": 9},
+        json={"spo2_low": 92.0, "hr_high": 115, "temp_low": 35.4},
     )
 
     assert login.status_code == 200
     assert response.status_code == 200
-    assert captured["thresholds"] == {"spo2_low": 92.0, "hr_high": 115, "rr_low": 9}
+    assert captured["thresholds"] == {"spo2_low": 92.0, "hr_high": 115, "temp_low": 35.4}
     assert device_state["settings"]["alert_thresholds"] == captured["thresholds"]
     assert device_state["alert_thresholds"] == captured["thresholds"]
     assert response.json()["updated_thresholds"] == captured["thresholds"]
@@ -99,8 +99,8 @@ async def test_linked_user_can_read_effective_device_thresholds(client, app_modu
         "device_id": "dev-001",
         "device_name": "Wrist 1",
         "device_type": "wrist",
-        "settings": {"alert_thresholds": {"spo2_low": 92.0, "hr_high": 115}},
-        "alert_thresholds": {"spo2_low": 88.0, "hr_high": 140},
+        "settings": {"alert_thresholds": {"spo2_low": 92.0, "hr_high": 115, "rr_low": 9}},
+        "alert_thresholds": {"spo2_low": 88.0, "hr_high": 140, "rr_high": 20},
     }
 
     async def fake_get_user_auth(user_id):
@@ -144,8 +144,6 @@ async def test_linked_user_can_read_effective_device_thresholds(client, app_modu
             "hr_low_critical": 40,
             "hr_high": 115,
             "hr_critical": 150,
-            "rr_low": 10,
-            "rr_high": 25,
         },
     }
 

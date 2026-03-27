@@ -259,8 +259,6 @@ ESP token va pairing code deu chi luu hash trong MongoDB.
 - `hr_low_critical`
 - `hr_high`
 - `hr_critical`
-- `rr_low`
-- `rr_high`
 
 Backend merge payload moi vao custom thresholds hien co, roi luu dong thoi vao `settings.alert_thresholds` va `alert_thresholds` tren document device.
 
@@ -276,6 +274,13 @@ Push notification flow hien tai:
 ### ESP endpoints
 
 - `POST /api/v1/esp/devices/{device_id}/readings`
+
+Payload ESP moi co the gui them:
+
+- `fall`: `true|false`
+- `fall_phase`: vi du `IDLE`, `IMPACT`, ...
+
+Khi `fall=true`, backend tao alert `fall_detected` muc `critical` va neu co FCM token active thi se day push len dien thoai.
 
 ## 8. Endpoint cu van con ton tai
 
@@ -372,7 +377,7 @@ So luong record hien tai:
 2. backend validate token va payload
 3. `health_service` normalize va luu vao `health_readings`
 4. backend lay `alert_thresholds` cua device va truyen vao `alert_service`
-5. `alert_service` sinh alert neu vuot nguong, gan `recipient_user_ids`
+5. `alert_service` sinh alert neu vuot nguong hoac khi `fall=true`, gan `recipient_user_ids`
 6. neu co push token active, server gui push qua FCM theo rule cooldown/escalation
 7. app doc lai qua `latest`, `history`, `summary`, `alerts`, `ecg`
 

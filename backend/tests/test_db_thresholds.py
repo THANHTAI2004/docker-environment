@@ -47,14 +47,13 @@ async def test_update_device_thresholds_merges_partial_payload_into_existing_ove
 
     success = await database.update_device_thresholds(
         "dev-001",
-        {"rr_low": 9, "hr_high": 120},
+        {"temp_low": 35.4, "hr_high": 120},
     )
 
     assert success is True
     assert fake_devices.doc["settings"]["alert_thresholds"] == {
         "spo2_low": 92.0,
         "hr_high": 120,
-        "rr_low": 9,
+        "temp_low": 35.4,
     }
     assert fake_devices.doc["alert_thresholds"] == fake_devices.doc["settings"]["alert_thresholds"]
-

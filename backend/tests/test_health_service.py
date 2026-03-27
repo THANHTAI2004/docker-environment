@@ -212,3 +212,58 @@ async def test_device_settings_thresholds_are_forwarded_to_alert_service(monkeyp
     assert success is True
     assert captured["doc"]["device_id"] == "dev-003"
     assert captured["thresholds"] == {"hr_high": 111, "spo2_low": 91.0}
+
+
+@pytest.mark.asyncio
+async def test_fall_payload_and_upload_reason_are_persisted_and_forwarded(monkeypatch):
+    captured = {}
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_type": "chest", "alert_thresholds": {}}
+
+    async def fake_insert_health_reading(doc):
+        captured["doc"] = doc
+        return "inserted"
+
+    async def fake_update_device_last_seen(device_id):
+        return True
+
+    async def fake_update_device_metadata(device_id, metadata):
+        captured["metadata"] = metadata
+        return True
+
+    async def fake_check_health_reading(doc, thresholds):
+        captured["alert_doc"] = doc
+        return []
+
+    monkeypatch.setattr(health_service_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(health_service_module.db, "insert_health_reading", fake_insert_health_reading)
+    monkeypatch.setattr(health_service_module.db, "update_device_last_seen", fake_update_device_last_seen)
+    monkeypatch.setattr(health_service_module.db, "update_device_metadata", fake_update_device_metadata)
+    monkeypatch.setattr(health_service_module.alert_service, "check_health_reading", fake_check_health_reading)
+
+    success = await health_service.process_health_reading(
+        {
+            "device_id": "dev-fall-001",
+            "timestamp": 1771763000.12,
+            "device_type": "chest",
+            "fall": True,
+            "fall_phase": "IMPACT",
+            "vitals": {"heart_rate": 72, "spo2": 98, "temperature": 36.7},
+            "metadata": {
+                "battery_level": 95,
+                "signal_strength": -62,
+                "signal_quality": 84,
+                "upload_reason": "routine",
+                "firmware_version": "esp32-s3-gateway-nimble-v1",
+            },
+        }
+    )
+
+    assert success is True
+    assert captured["doc"]["fall"] is True
+    assert captured["doc"]["fall_phase"] == "IMPACT"
+    assert captured["doc"]["metadata"]["upload_reason"] == "routine"
+    assert captured["doc"]["upload_reason"] == "routine"
+    assert "respiratory_rate" not in captured["doc"].get("vitals", {})
+    assert captured["alert_doc"]["fall"] is True

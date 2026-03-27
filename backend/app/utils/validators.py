@@ -31,12 +31,6 @@ def validate_vital_signs(data: Dict[str, Any]) -> tuple[bool, Optional[List[str]
         if not (20 <= hr <= 300):
             errors.append(f"Heart rate out of range: {hr} bpm (expected 20-300 bpm)")
     
-    # Respiratory rate validation (5-60 breaths/min)
-    if "respiratory_rate" in data and data["respiratory_rate"] is not None:
-        rr = data["respiratory_rate"]
-        if not (5 <= rr <= 60):
-            errors.append(f"Respiratory rate out of range: {rr} (expected 5-60 breaths/min)")
-    
     # Battery level validation (0-100%)
     if "battery_level" in data and data["battery_level"] is not None:
         battery = data["battery_level"]

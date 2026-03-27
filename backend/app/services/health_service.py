@@ -91,7 +91,7 @@ class HealthService:
         if reading.vitals:
             vitals.update(reading.vitals.model_dump(exclude_none=True))
 
-        for key in ("respiratory_rate", "heart_rate", "temperature", "spo2"):
+        for key in ("heart_rate", "temperature", "spo2"):
             value = getattr(reading, key, None)
             if value is not None and key not in vitals:
                 vitals[key] = value
@@ -130,8 +130,14 @@ class HealthService:
                 doc["signal_strength"] = metadata["signal_strength"]
             if metadata.get("signal_quality") is not None:
                 doc["signal_quality"] = metadata["signal_quality"]
+            if metadata.get("upload_reason") is not None:
+                doc["upload_reason"] = metadata["upload_reason"]
         if ecg:
             doc["ecg"] = ecg
+        if reading.fall is not None:
+            doc["fall"] = reading.fall
+        if reading.fall_phase is not None:
+            doc["fall_phase"] = reading.fall_phase
         if reading.location:
             doc["location"] = reading.location.model_dump(exclude_none=True)
 

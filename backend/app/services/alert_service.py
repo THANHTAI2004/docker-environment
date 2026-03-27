@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from ..config import settings
 from ..db import db
 from ..observability import ALERTS_CREATED_TOTAL
+from ..utils.thresholds import sanitize_device_thresholds
 from .push_notification_service import push_notification_service
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,6 @@ class AlertService:
             "hr_low_critical": settings.hr_low_critical,
             "hr_high": settings.hr_high_warning,
             "hr_critical": settings.hr_high_critical,
-            "rr_low": settings.rr_low_warning,
-            "rr_high": settings.rr_high_warning,
         }
 
     async def check_health_reading(
@@ -62,7 +61,7 @@ class AlertService:
                         "spo2",
                         spo2,
                         thresholds["spo2_critical"],
-                        f"Blood oxygen critically low ({spo2}%)",
+                        f"SpO2 xuống mức nguy hiểm ({self._format_number(spo2)}%)",
                     )
                 )
             elif spo2 < thresholds["spo2_low"]:
@@ -75,7 +74,7 @@ class AlertService:
                         "spo2",
                         spo2,
                         thresholds["spo2_low"],
-                        f"Blood oxygen below normal ({spo2}%)",
+                        f"SpO2 thấp hơn ngưỡng an toàn ({self._format_number(spo2)}%)",
                     )
                 )
 
@@ -91,7 +90,7 @@ class AlertService:
                         "temperature",
                         temp,
                         thresholds["temp_critical"],
-                        f"Temperature critically high ({temp}C)",
+                        f"Nhiệt độ cơ thể ở mức nguy hiểm ({self._format_number(temp)}°C)",
                     )
                 )
             elif temp >= thresholds["temp_high"]:
@@ -104,7 +103,7 @@ class AlertService:
                         "temperature",
                         temp,
                         thresholds["temp_high"],
-                        f"Temperature above normal ({temp}C)",
+                        f"Nhiệt độ cơ thể vượt ngưỡng an toàn ({self._format_number(temp)}°C)",
                     )
                 )
             elif temp < thresholds["temp_low"]:
@@ -117,7 +116,7 @@ class AlertService:
                         "temperature",
                         temp,
                         thresholds["temp_low"],
-                        f"Temperature below normal ({temp}C)",
+                        f"Nhiệt độ cơ thể thấp hơn ngưỡng an toàn ({self._format_number(temp)}°C)",
                     )
                 )
 
@@ -133,7 +132,7 @@ class AlertService:
                         "heart_rate",
                         hr,
                         thresholds["hr_critical"],
-                        f"Heart rate critically high ({hr} bpm)",
+                        f"Nhịp tim ở mức nguy hiểm ({self._format_number(hr)} bpm)",
                     )
                 )
             elif hr >= thresholds["hr_high"]:
@@ -146,7 +145,7 @@ class AlertService:
                         "heart_rate",
                         hr,
                         thresholds["hr_high"],
-                        f"Heart rate above normal ({hr} bpm)",
+                        f"Nhịp tim vượt ngưỡng an toàn ({self._format_number(hr)} bpm)",
                     )
                 )
             elif hr < thresholds["hr_low_critical"]:
@@ -159,7 +158,7 @@ class AlertService:
                         "heart_rate",
                         hr,
                         thresholds["hr_low_critical"],
-                        f"Heart rate critically low ({hr} bpm)",
+                        f"Nhịp tim xuống mức nguy hiểm ({self._format_number(hr)} bpm)",
                     )
                 )
             elif hr < thresholds["hr_low"]:
@@ -172,38 +171,27 @@ class AlertService:
                         "heart_rate",
                         hr,
                         thresholds["hr_low"],
-                        f"Heart rate below normal ({hr} bpm)",
+                        f"Nhịp tim thấp hơn ngưỡng an toàn ({self._format_number(hr)} bpm)",
                     )
                 )
 
-        rr = self._get_metric(reading, "respiratory_rate")
-        if rr is not None:
-            if rr >= thresholds["rr_high"]:
-                alerts.append(
-                    self._create_alert(
-                        device_id,
-                        timestamp,
-                        "rr_high",
-                        "warning",
-                        "respiratory_rate",
-                        rr,
-                        thresholds["rr_high"],
-                        f"Respiratory rate above normal ({rr} breaths/min)",
-                    )
+        if reading.get("fall") is True:
+            fall_phase = reading.get("fall_phase")
+            message = "Phát hiện té ngã"
+            if fall_phase:
+                message = f"Phát hiện té ngã ({self._localize_fall_phase(fall_phase)})"
+            alerts.append(
+                self._create_alert(
+                    device_id,
+                    timestamp,
+                    "fall_detected",
+                    "critical",
+                    "fall",
+                    1,
+                    1,
+                    message,
                 )
-            elif rr < thresholds["rr_low"]:
-                alerts.append(
-                    self._create_alert(
-                        device_id,
-                        timestamp,
-                        "rr_low",
-                        "warning",
-                        "respiratory_rate",
-                        rr,
-                        thresholds["rr_low"],
-                        f"Respiratory rate below normal ({rr} breaths/min)",
-                    )
-                )
+            )
 
         ecg = reading.get("ecg")
         if ecg and settings.ecg_quality_alert:
@@ -217,7 +205,7 @@ class AlertService:
                         "ecg_quality",
                         1,
                         0,
-                        "ECG lead disconnected",
+                        "Điện cực ECG bị ngắt kết nối",
                     )
                 )
             elif ecg.get("quality") == "poor":
@@ -230,7 +218,7 @@ class AlertService:
                         "ecg_quality",
                         0,
                         0,
-                        "ECG signal quality is poor",
+                        "Chất lượng tín hiệu ECG kém",
                     )
                 )
 
@@ -261,12 +249,7 @@ class AlertService:
         if not user_thresholds:
             return merged
 
-        if hasattr(user_thresholds, "model_dump"):
-            user_thresholds = user_thresholds.model_dump(exclude_none=True)
-        elif hasattr(user_thresholds, "dict"):
-            user_thresholds = user_thresholds.dict(exclude_none=True)
-
-        for key, value in user_thresholds.items():
+        for key, value in sanitize_device_thresholds(user_thresholds).items():
             if value is not None:
                 merged[key] = value
         return merged
@@ -303,6 +286,26 @@ class AlertService:
             "acknowledged": False,
         }
         return alert
+
+    def _format_number(self, value: Any) -> str:
+        """Format numeric values for user-facing alert copy."""
+        if isinstance(value, float):
+            return f"{value:g}"
+        return str(value)
+
+    def _localize_fall_phase(self, phase: Any) -> str:
+        """Translate known fall phases into Vietnamese labels."""
+        phase_text = str(phase or "").strip()
+        if not phase_text:
+            return ""
+        fall_phase_labels = {
+            "IDLE": "chờ",
+            "FREE_FALL": "rơi tự do",
+            "IMPACT": "va chạm",
+            "CONFIRMED": "đã xác nhận",
+            "RECOVERY": "hồi phục",
+        }
+        return fall_phase_labels.get(phase_text.upper(), phase_text)
 
 
 # Global alert service instance

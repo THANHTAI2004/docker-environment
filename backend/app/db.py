@@ -11,6 +11,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from .config import settings
+from .utils.thresholds import sanitize_device_thresholds
 
 logger = logging.getLogger(__name__)
 
@@ -749,6 +750,10 @@ class Database:
                 alert_thresholds = doc["settings"].get("alert_thresholds")
                 if alert_thresholds is not None:
                     doc["alert_thresholds"] = alert_thresholds
+            if doc.get("alert_thresholds") is not None:
+                doc["alert_thresholds"] = sanitize_device_thresholds(doc["alert_thresholds"])
+            if isinstance(doc.get("settings"), dict) and doc["settings"].get("alert_thresholds") is not None:
+                doc["settings"]["alert_thresholds"] = sanitize_device_thresholds(doc["settings"]["alert_thresholds"])
             doc["last_seen"] = now
 
             result = await self.devices.update_one(
@@ -883,15 +888,15 @@ class Database:
             merged_thresholds: Dict[str, Any] = {}
             legacy_thresholds = existing.get("alert_thresholds")
             if isinstance(legacy_thresholds, dict):
-                merged_thresholds.update(legacy_thresholds)
+                merged_thresholds.update(sanitize_device_thresholds(legacy_thresholds))
 
             settings_block = existing.get("settings")
             if isinstance(settings_block, dict):
                 settings_thresholds = settings_block.get("alert_thresholds")
                 if isinstance(settings_thresholds, dict):
-                    merged_thresholds.update(settings_thresholds)
+                    merged_thresholds.update(sanitize_device_thresholds(settings_thresholds))
 
-            merged_thresholds.update(thresholds)
+            merged_thresholds.update(sanitize_device_thresholds(thresholds))
             result = await self.devices.update_one(
                 {"device_id": device_id},
                 {
@@ -1195,14 +1200,24 @@ class Database:
                         "added_by_user_id": link.get("added_by_user_id"),
                         "linked_by": link.get("added_by_user_id"),
                         "is_active": link.get("is_active"),
-                        "settings": device.get("settings") or (
-                            {"alert_thresholds": device.get("alert_thresholds")}
-                            if device.get("alert_thresholds")
-                            else None
-                        ),
+                        "settings": None,
                         "linked_users": linked_users_by_device.get(link["device_id"], []),
                     }
                 )
+                current = results[-1]
+                settings_thresholds = {}
+                if isinstance(device.get("settings"), dict):
+                    current["settings"] = dict(device.get("settings"))
+                    settings_thresholds = sanitize_device_thresholds(current["settings"].get("alert_thresholds"))
+                    if settings_thresholds:
+                        current["settings"]["alert_thresholds"] = settings_thresholds
+                    else:
+                        current["settings"].pop("alert_thresholds", None)
+                elif device.get("alert_thresholds"):
+                    settings_thresholds = sanitize_device_thresholds(device.get("alert_thresholds"))
+                    current["settings"] = {"alert_thresholds": settings_thresholds} if settings_thresholds else None
+                if not current["settings"]:
+                    current["settings"] = None
             return results
         except Exception as exc:
             logger.error("List devices for user error: %s", exc)
@@ -1384,7 +1399,7 @@ class Database:
         try:
             result = await self.users.update_one(
                 {"user_id": user_id},
-                {"$set": {"alert_thresholds": thresholds}},
+                {"$set": {"alert_thresholds": sanitize_device_thresholds(thresholds)}},
             )
             return result.matched_count > 0
         except Exception as exc:

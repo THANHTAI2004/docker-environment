@@ -39,10 +39,6 @@ class AlertThresholds(BaseModel):
     hr_low_critical: Optional[int] = 40
     hr_high: Optional[int] = 120
     hr_critical: Optional[int] = 150
-    
-    # Respiratory rate
-    rr_low: Optional[int] = 10
-    rr_high: Optional[int] = 25
 
 
 class User(BaseModel):
@@ -112,5 +108,3 @@ class ThresholdsUpdate(BaseModel):
     hr_low_critical: Optional[int] = None
     hr_high: Optional[int] = None
     hr_critical: Optional[int] = None
-    rr_low: Optional[int] = None
-    rr_high: Optional[int] = None
