@@ -44,7 +44,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
       - REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET:?REFRESH_TOKEN_SECRET is required}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://app.eldercare.io.vn,https://admin.eldercare.io.vn,http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000}
-      - CORS_ALLOW_ORIGIN_REGEX=${CORS_ALLOW_ORIGIN_REGEX-}
+      - CORS_ALLOW_ORIGIN_REGEX=${CORS_ALLOW_ORIGIN_REGEX:-^https?://(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$}
       - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
       - RATE_LIMIT_STORAGE=${RATE_LIMIT_STORAGE:-redis}
       - RATE_LIMIT_GENERAL_PER_MINUTE=${RATE_LIMIT_GENERAL_PER_MINUTE:-300}
@@ -82,3 +82,4 @@ volumes:
   nodered_data:
   mongodb_data:
   mongodb_config:
+

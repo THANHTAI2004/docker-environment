@@ -25,7 +25,7 @@ class Settings(BaseSettings):
         "http://localhost,http://127.0.0.1,"
         "http://localhost:3000,http://127.0.0.1:3000"
     )
-    cors_allow_origin_regex: str = ""
+    cors_allow_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$"
     rate_limit_enabled: bool = True
     rate_limit_storage: str = "redis"
     rate_limit_general_per_minute: int = 300
@@ -128,3 +128,4 @@ class Settings(BaseSettings):
 # Global settings instance
 settings = Settings()
 settings.validate_runtime_secrets()
+

@@ -36,6 +36,23 @@ async def test_metrics_are_disabled_by_default(client):
 
 
 @pytest.mark.asyncio
+async def test_login_preflight_allows_localhost_origin_on_any_port(client):
+    origin = "http://localhost:52481"
+    response = await client.options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert response.headers["access-control-allow-credentials"] == "true"
+
+
+@pytest.mark.asyncio
 async def test_login_returns_refresh_token_and_session_id(client, app_module, monkeypatch):
     users = {
         "patient-001": {
@@ -1859,3 +1876,4 @@ async def test_users_with_shared_device_access_can_view_each_other(client, app_m
     assert login.status_code == 200
     assert response.status_code == 200
     assert response.json()["user_id"] == "user-002"
+
