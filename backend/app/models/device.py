@@ -2,7 +2,7 @@
 Device data models.
 """
 from datetime import datetime
-from typing import Optional, Dict, Literal
+from typing import Optional, Dict
 from pydantic import BaseModel, ConfigDict, Field
 
 from .user import AlertThresholds
@@ -65,14 +65,3 @@ class DeviceClaimRequest(BaseModel):
     """Claim payload that proves physical access to a device."""
     pairing_code: str = Field(..., min_length=6, max_length=32)
 
-
-class ECGRequestCommand(BaseModel):
-    """ECG capture command issued by app."""
-    duration_seconds: int = Field(default=10, ge=3, le=60)
-    sampling_rate: int = Field(default=250, ge=100, le=1000)
-
-
-class ESPCommandAck(BaseModel):
-    """ESP command acknowledgement payload."""
-    status: Literal["done", "failed"] = "done"
-    message: Optional[str] = None

@@ -30,45 +30,6 @@ DB_PING_FAILURES = Counter(
     "wearable_db_ping_failures_total",
     "Database ping failures observed by readiness checks",
 )
-PENDING_COMMANDS = Gauge(
-    "wearable_device_commands_pending",
-    "Pending or in-flight device commands",
-)
-DEVICE_COMMANDS_BY_STATUS = Gauge(
-    "wearable_device_commands_current",
-    "Current device commands by status",
-    ["status"],
-)
-DEVICE_COMMAND_DISPATCHED_TOTAL = Counter(
-    "wearable_device_command_dispatched_total",
-    "Total device commands dispatched to ESP",
-    ["command"],
-)
-DEVICE_COMMAND_COMPLETED_TOTAL = Counter(
-    "wearable_device_command_completed_total",
-    "Total device commands completed successfully",
-    ["command"],
-)
-DEVICE_COMMAND_FAILED_TOTAL = Counter(
-    "wearable_device_command_failed_total",
-    "Total device commands that failed terminally",
-    ["command", "reason"],
-)
-DEVICE_COMMAND_TIMEOUT_TOTAL = Counter(
-    "wearable_device_command_timeout_total",
-    "Total device commands that exceeded ACK timeout",
-    ["command"],
-)
-DEVICE_COMMAND_RETRY_TOTAL = Counter(
-    "wearable_device_command_retry_total",
-    "Total device command retries scheduled",
-    ["command"],
-)
-DEVICE_COMMAND_QUEUE_LATENCY = Histogram(
-    "wearable_device_command_queue_latency_seconds",
-    "Time spent waiting in queue before dispatch",
-    ["command"],
-)
 AUTH_LOGIN_TOTAL = Counter(
     "wearable_auth_login_total",
     "Login attempts",

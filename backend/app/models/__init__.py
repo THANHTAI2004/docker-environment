@@ -9,8 +9,6 @@ from .device import (
     DeviceDB,
     DeviceRegistration,
     DeviceSettings,
-    ECGRequestCommand,
-    ESPCommandAck,
 )
 from .link import DeviceCaregiverRequest, DeviceLink, DeviceLinkDB, DeviceLinkRequest, DeviceViewerRequest
 from .user import User, UserDB, UserCreate, ThresholdsUpdate, AlertThresholds
@@ -38,8 +36,6 @@ __all__ = [
     "DeviceDB",
     "DeviceRegistration",
     "DeviceSettings",
-    "ECGRequestCommand",
-    "ESPCommandAck",
     "DeviceLink",
     "DeviceLinkDB",
     "DeviceLinkRequest",

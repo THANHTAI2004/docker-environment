@@ -251,30 +251,17 @@ App moi nen uu tien dung nhom `/api/v1/devices/...`.
 
 ## ECG
 
-### Gui lenh yeu cau do ECG
+### Doc du lieu ECG lien tuc
 
-`POST /api/v1/devices/{device_id}/ecg/request`
+Endpoint `POST /api/v1/devices/{device_id}/ecg/request` da bi bo.
 
-Request:
+ESP can tu gui waveform qua:
 
-```json
-{
-  "duration_seconds": 30,
-  "sampling_rate": 250
-}
-```
+- `POST /api/v1/esp/devices/{device_id}/readings`
 
-Response:
+App doc lai du lieu ECG da luu qua:
 
-```json
-{
-  "status": "queued",
-  "delivery": "rest_polling",
-  "request_id": "<uuid>",
-  "command_id": "<mongo_id>",
-  "expires_at": "2026-03-13T11:05:00.000000"
-}
-```
+- `GET /api/v1/devices/{device_id}/ecg`
 
 ## Error Guide
 

@@ -1542,51 +1542,6 @@ async def test_owner_can_remove_viewer(client, app_module, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_viewer_cannot_request_ecg(client, app_module, monkeypatch):
-    users = {
-        "viewer-001": {
-            "_id": "1",
-            "user_id": "viewer-001",
-            "name": "Viewer One",
-            "phone_number": "+84987654321",
-            "role": "user",
-            "is_active": True,
-            "password_hash": hash_password("ViewerPass123"),
-            "caregivers": [],
-        }
-    }
-
-    async def fake_get_user_auth(user_id):
-        return users.get(user_id)
-
-    async def fake_get_device(device_id):
-        return {"device_id": device_id, "device_name": "Chest 1", "device_type": "chest"}
-
-    async def fake_get_device_link(device_id, user_id):
-        return {"device_id": device_id, "user_id": user_id, "link_role": "viewer"}
-
-    monkeypatch.setattr(app_module.db, "get_user_auth", fake_get_user_auth)
-    monkeypatch.setattr(app_module.db, "get_user_auth_by_phone", _make_phone_lookup(users))
-    monkeypatch.setattr(app_module.db, "get_device", fake_get_device)
-    monkeypatch.setattr(app_module.db, "get_device_link", fake_get_device_link)
-
-    login = await client.post(
-        "/api/v1/auth/login",
-        json={"phone_number": "0987654321", "password": "ViewerPass123"},
-    )
-    token = login.json()["access_token"]
-
-    response = await client.post(
-        "/api/v1/devices/dev-001/ecg/request",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"duration_seconds": 10, "sampling_rate": 250},
-    )
-
-    assert login.status_code == 200
-    assert response.status_code == 403
-
-
-@pytest.mark.asyncio
 async def test_viewer_can_access_latest_history_summary_and_ecg(client, app_module, monkeypatch):
     users = {
         "viewer-001": {

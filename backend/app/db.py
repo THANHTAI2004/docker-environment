@@ -1,38 +1,17 @@
 """
 MongoDB database operations for health monitoring.
 """
-import hashlib
-import json
 import logging
 import secrets
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 
 import motor.motor_asyncio
-from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from .config import settings
-from .observability import (
-    DEVICE_COMMAND_COMPLETED_TOTAL,
-    DEVICE_COMMAND_DISPATCHED_TOTAL,
-    DEVICE_COMMAND_FAILED_TOTAL,
-    DEVICE_COMMAND_QUEUE_LATENCY,
-    DEVICE_COMMAND_RETRY_TOTAL,
-    DEVICE_COMMAND_TIMEOUT_TOTAL,
-)
 
 logger = logging.getLogger(__name__)
-
-COMMAND_STATUS_QUEUED = "queued"
-COMMAND_STATUS_DISPATCHED = "dispatched"
-COMMAND_STATUS_ACKED = "acked"
-COMMAND_STATUS_COMPLETED = "completed"
-COMMAND_STATUS_FAILED = "failed"
-COMMAND_STATUS_EXPIRED = "expired"
-COMMAND_STATUS_CANCELLED = "cancelled"
-
-ACTIVE_COMMAND_STATUSES = (COMMAND_STATUS_QUEUED, COMMAND_STATUS_DISPATCHED)
 
 
 class Database:
@@ -50,7 +29,6 @@ class Database:
         self.alerts = None
         self.devices = None
         self.users = None
-        self.device_commands = None
         self.audit_logs = None
         self.device_links = None
         self.auth_sessions = None
@@ -64,7 +42,6 @@ class Database:
         self.alerts = self.db[settings.mongo_alerts_collection]
         self.devices = self.db[settings.mongo_devices_collection]
         self.users = self.db[settings.mongo_users_collection]
-        self.device_commands = self.db[settings.mongo_commands_collection]
         self.audit_logs = self.db[settings.mongo_audit_collection]
         self.device_links = self.db[settings.mongo_device_links_collection]
         self.auth_sessions = self.db[settings.mongo_auth_sessions_collection]
@@ -123,26 +100,14 @@ class Database:
 
             # Health readings
             await self.health_readings.create_index([("device_id", 1), ("timestamp", -1)])
-            await self.health_readings.create_index([("device_uid", 1), ("timestamp", -1)])
             await self.health_readings.create_index([("device_type", 1)])
             await self.health_readings.create_index([("recorded_at", 1)], expireAfterSeconds=7776000)
-            # QoS1 de-duplication: same (device_id, seq) only stored once when seq exists.
-            await self.health_readings.create_index(
-                [("device_id", 1), ("seq", 1)],
-                unique=True,
-                partialFilterExpression={"seq": {"$type": "number"}},
-            )
 
             # Alerts
             await self.alerts.create_index([("severity", 1), ("acknowledged", 1)])
             await self.alerts.create_index([("device_id", 1)])
             await self.alerts.create_index([("device_id", 1), ("alert_type", 1), ("timestamp", -1)])
             await self.alerts.create_index([("recorded_at", 1)], expireAfterSeconds=15552000)
-            await self.alerts.create_index(
-                [("device_id", 1), ("seq", 1), ("alert_type", 1)],
-                unique=True,
-                partialFilterExpression={"seq": {"$type": "number"}},
-            )
 
             # Devices
             await self.devices.create_index([("device_id", 1)], unique=True)
@@ -156,17 +121,6 @@ class Database:
             await self.users.create_index([("email", 1)], unique=True, sparse=True)
             await self._ensure_sparse_index(self.users, [("role", 1)])
             await self._normalize_existing_user_roles()
-
-            # Device commands (ESP polling)
-            await self.device_commands.create_index([("device_id", 1), ("status", 1), ("created_at", 1)])
-            await self.device_commands.create_index([("device_id", 1), ("dedupe_key", 1), ("created_at", -1)])
-            await self.device_commands.create_index([("request_id", 1)], unique=True, sparse=True)
-            # Auto-clean commands when expires_at is reached.
-            await self._ensure_ttl_index(
-                self.device_commands,
-                [("expires_at", 1)],
-                ttl_seconds=0,
-            )
 
             # Audit logs
             await self.audit_logs.create_index([("timestamp", -1)])
@@ -398,19 +352,6 @@ class Database:
             {"$unset": {"owner_user_id": ""}},
         )
 
-    def _make_command_dedupe_key(self, payload: Dict[str, Any]) -> str:
-        """Create a stable dedupe key for logically identical commands."""
-        fingerprint = json.dumps(
-            {
-                "device_id": payload.get("device_id"),
-                "command": payload.get("command"),
-                "payload": payload.get("payload", {}),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        return hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
-
     # ===== Legacy methods =====
 
     async def insert_reading(self, doc: Dict[str, Any]) -> bool:
@@ -450,8 +391,7 @@ class Database:
             await self.health_readings.insert_one(doc)
             return "inserted"
         except DuplicateKeyError:
-            # Duplicate QoS1 retransmission (same device_id + seq)
-            logger.info("Duplicate reading ignored for device=%s seq=%s", doc.get("device_id"), doc.get("seq"))
+            logger.info("Duplicate reading ignored for device=%s", doc.get("device_id"))
             return "duplicate"
         except Exception as exc:
             logger.error("Health reading insert error: %s", exc)
@@ -479,12 +419,7 @@ class Database:
                 target_device_ids = accessible_device_ids
             if not target_device_ids:
                 return []
-            query: Dict[str, Any] = {
-                "$or": [
-                    {"device_id": {"$in": target_device_ids}},
-                    {"device_uid": {"$in": target_device_ids}},
-                ]
-            }
+            query: Dict[str, Any] = {"device_id": {"$in": target_device_ids}}
             if start_time or end_time:
                 query["timestamp"] = {}
                 if start_time is not None:
@@ -508,10 +443,7 @@ class Database:
         if self.health_readings is None:
             return []
         try:
-            query: Dict[str, Any] = {
-                "$or": [{"device_id": device_id}, {"device_uid": device_id}],
-                "ecg": {"$exists": True, "$ne": None},
-            }
+            query: Dict[str, Any] = {"device_id": device_id, "ecg": {"$exists": True, "$ne": None}}
             if quality_filter:
                 query["ecg.quality"] = quality_filter
             cursor = self.health_readings.find(query).sort("timestamp", -1).limit(limit)
@@ -531,7 +463,7 @@ class Database:
         if self.health_readings is None:
             return []
         try:
-            query: Dict[str, Any] = {"$or": [{"device_id": device_id}, {"device_uid": device_id}]}
+            query: Dict[str, Any] = {"device_id": device_id}
             if start_time or end_time:
                 query["timestamp"] = {}
                 if start_time is not None:
@@ -551,7 +483,7 @@ class Database:
             return None
         try:
             doc = await self.health_readings.find_one(
-                {"$or": [{"device_id": device_id}, {"device_uid": device_id}]},
+                {"device_id": device_id},
                 sort=[("timestamp", -1)],
             )
             return self._serialize_doc(doc) if doc else None
@@ -577,12 +509,7 @@ class Database:
                 target_device_ids = accessible_device_ids
             if not target_device_ids:
                 return None
-            query: Dict[str, Any] = {
-                "$or": [
-                    {"device_id": {"$in": target_device_ids}},
-                    {"device_uid": {"$in": target_device_ids}},
-                ]
-            }
+            query: Dict[str, Any] = {"device_id": {"$in": target_device_ids}}
             doc = await self.health_readings.find_one(query, sort=[("timestamp", -1)])
             return self._serialize_doc(doc) if doc else None
         except Exception as exc:
@@ -603,10 +530,7 @@ class Database:
             if not accessible_device_ids:
                 return []
             query: Dict[str, Any] = {
-                "$or": [
-                    {"device_id": {"$in": accessible_device_ids}},
-                    {"device_uid": {"$in": accessible_device_ids}},
-                ],
+                "device_id": {"$in": accessible_device_ids},
                 "ecg": {"$exists": True, "$ne": None},
             }
             if quality_filter:
@@ -627,7 +551,7 @@ class Database:
             doc = dict(doc)
             if "recorded_at" not in doc and doc.get("timestamp"):
                 doc["recorded_at"] = datetime.utcfromtimestamp(float(doc["timestamp"]))
-            if doc.get("seq") is None and doc.get("timestamp") is not None:
+            if doc.get("timestamp") is not None:
                 window = settings.alert_dedupe_window_seconds
                 existing = await self.alerts.find_one(
                     {
@@ -651,9 +575,8 @@ class Database:
             return str(result.inserted_id)
         except DuplicateKeyError:
             logger.info(
-                "Duplicate alert ignored for device=%s seq=%s type=%s",
+                "Duplicate alert ignored for device=%s type=%s",
                 doc.get("device_id"),
-                doc.get("seq"),
                 doc.get("alert_type"),
             )
             return None
@@ -825,22 +748,6 @@ class Database:
             return doc
         except Exception as exc:
             logger.error("Internal device query error: %s", exc)
-            return None
-
-    async def get_device_command(self, command_id: str, device_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Fetch one device command by ID."""
-        if self.device_commands is None:
-            return None
-        try:
-            from bson import ObjectId
-
-            query: Dict[str, Any] = {"_id": ObjectId(command_id)}
-            if device_id:
-                query["device_id"] = device_id
-            doc = await self.device_commands.find_one(query)
-            return self._serialize_doc(doc) if doc else None
-        except Exception as exc:
-            logger.error("Device command get error: %s", exc)
             return None
 
     async def set_device_token_hash(self, device_id: str, token_hash: str) -> bool:
@@ -1271,322 +1178,6 @@ class Database:
             logger.error("List users for device error: %s", exc)
             return []
 
-    # ===== Device command methods =====
-
-    async def enqueue_device_command(self, doc: Dict[str, Any]) -> Dict[str, Any]:
-        """Insert one command for ESP polling with dedupe and pending limits."""
-        if self.device_commands is None:
-            return {"status": "error"}
-        try:
-            now = datetime.utcnow()
-            payload = dict(doc)
-            payload.setdefault("created_at", now)
-            payload.setdefault("status", COMMAND_STATUS_QUEUED)
-            payload.setdefault("dispatch_count", 0)
-            payload.setdefault("next_retry_at", now)
-            payload["dedupe_key"] = self._make_command_dedupe_key(payload)
-
-            pending_filter = {
-                "device_id": payload["device_id"],
-                "status": {"$in": list(ACTIVE_COMMAND_STATUSES)},
-            }
-            pending_count = await self.device_commands.count_documents(pending_filter)
-            if pending_count >= settings.command_max_pending_per_device:
-                return {"status": "limit_reached", "pending_count": pending_count}
-
-            duplicate = await self.device_commands.find_one(
-                {
-                    "device_id": payload["device_id"],
-                    "dedupe_key": payload["dedupe_key"],
-                    "status": {"$in": list(ACTIVE_COMMAND_STATUSES)},
-                    "created_at": {
-                        "$gte": now - timedelta(seconds=settings.command_dedupe_window_seconds),
-                    },
-                },
-                sort=[("created_at", -1)],
-            )
-            if duplicate:
-                return {
-                    "status": "duplicate",
-                    "command_id": str(duplicate["_id"]),
-                    "request_id": duplicate.get("request_id"),
-                    "expires_at": duplicate.get("expires_at"),
-                }
-
-            result = await self.device_commands.insert_one(payload)
-            return {
-                "status": "queued",
-                "command_id": str(result.inserted_id),
-                "request_id": payload.get("request_id"),
-                "expires_at": payload.get("expires_at"),
-            }
-        except DuplicateKeyError:
-            logger.warning("Duplicate command request_id=%s", doc.get("request_id"))
-            existing = await self.device_commands.find_one({"request_id": doc.get("request_id")})
-            if existing:
-                return {
-                    "status": "duplicate",
-                    "command_id": str(existing["_id"]),
-                    "request_id": existing.get("request_id"),
-                    "expires_at": existing.get("expires_at"),
-                }
-            return {"status": "error"}
-        except Exception as exc:
-            logger.error("Enqueue device command error: %s", exc)
-            return {"status": "error"}
-
-    async def claim_next_device_command(self, device_id: str) -> Optional[Dict[str, Any]]:
-        """Claim next pending command for one ESP device."""
-        if self.device_commands is None:
-            return None
-        try:
-            now = datetime.utcnow()
-            query: Dict[str, Any] = {
-                "device_id": device_id,
-                "status": COMMAND_STATUS_QUEUED,
-                "$or": [
-                    {"expires_at": {"$exists": False}},
-                    {"expires_at": None},
-                    {"expires_at": {"$gt": now}},
-                ],
-                "$and": [
-                    {
-                        "$or": [
-                            {"next_retry_at": {"$exists": False}},
-                            {"next_retry_at": None},
-                            {"next_retry_at": {"$lte": now}},
-                        ]
-                    }
-                ],
-            }
-            update = {
-                "$set": {
-                    "status": COMMAND_STATUS_DISPATCHED,
-                    "dispatched_at": now,
-                    "last_dispatched_at": now,
-                    "last_error": None,
-                    "failure_reason": None,
-                },
-                "$inc": {"dispatch_count": 1},
-            }
-            doc = await self.device_commands.find_one_and_update(
-                query,
-                update,
-                sort=[("created_at", 1)],
-                return_document=ReturnDocument.AFTER,
-            )
-            if doc:
-                command_name = doc.get("command", "unknown")
-                created_at = doc.get("created_at")
-                if isinstance(created_at, datetime):
-                    latency = max((now - created_at).total_seconds(), 0.0)
-                    DEVICE_COMMAND_QUEUE_LATENCY.labels(command=command_name).observe(latency)
-                DEVICE_COMMAND_DISPATCHED_TOTAL.labels(command=command_name).inc()
-            return self._serialize_doc(doc) if doc else None
-        except Exception as exc:
-            logger.error("Claim device command error: %s", exc)
-            return None
-
-    async def acknowledge_device_command(
-        self,
-        device_id: str,
-        command_id: str,
-        status: str,
-        message: Optional[str] = None,
-    ) -> bool:
-        """Acknowledge one command from ESP device."""
-        if self.device_commands is None:
-            return False
-        try:
-            from bson import ObjectId
-
-            normalized_status = COMMAND_STATUS_ACKED if status == "done" else COMMAND_STATUS_FAILED
-            now = datetime.utcnow()
-            update_fields: Dict[str, Any] = {
-                "status": normalized_status,
-                "ack_message": message,
-                "acked_at": now,
-            }
-            if normalized_status == COMMAND_STATUS_FAILED:
-                update_fields["completed_at"] = now
-                update_fields["failure_reason"] = message or "device reported failure"
-                update_fields["last_error"] = message or "device reported failure"
-
-            update = {
-                "$set": update_fields
-            }
-            current = await self.device_commands.find_one({"_id": ObjectId(command_id), "device_id": device_id})
-            command_name = current.get("command", "unknown") if current else "unknown"
-            result = await self.device_commands.update_one(
-                {
-                    "_id": ObjectId(command_id),
-                    "device_id": device_id,
-                    "status": COMMAND_STATUS_DISPATCHED,
-                },
-                update,
-            )
-            if result.modified_count > 0 and normalized_status == COMMAND_STATUS_FAILED:
-                DEVICE_COMMAND_FAILED_TOTAL.labels(
-                    command=command_name,
-                    reason="device_failed",
-                ).inc()
-            return result.modified_count > 0
-        except Exception as exc:
-            logger.error("Acknowledge device command error: %s", exc)
-            return False
-
-    async def cancel_device_command(self, device_id: str, command_id: str, reason: str) -> bool:
-        """Cancel a queued or dispatched device command."""
-        if self.device_commands is None:
-            return False
-        try:
-            from bson import ObjectId
-
-            result = await self.device_commands.update_one(
-                {
-                    "_id": ObjectId(command_id),
-                    "device_id": device_id,
-                    "status": {"$in": [COMMAND_STATUS_QUEUED, COMMAND_STATUS_DISPATCHED]},
-                },
-                {
-                    "$set": {
-                        "status": COMMAND_STATUS_CANCELLED,
-                        "completed_at": datetime.utcnow(),
-                        "ack_message": reason,
-                        "failure_reason": reason,
-                        "last_error": reason,
-                    }
-                },
-            )
-            return result.modified_count > 0
-        except Exception as exc:
-            logger.error("Cancel device command error: %s", exc)
-            return False
-
-    async def recover_stale_device_commands(self) -> Dict[str, int]:
-        """Recover stale command states and finalize terminal transitions."""
-        if self.device_commands is None:
-            return {"completed": 0, "requeued": 0, "failed": 0, "expired": 0}
-
-        summary = {"completed": 0, "requeued": 0, "failed": 0, "expired": 0}
-        now = datetime.utcnow()
-        retry_after = now + timedelta(seconds=max(0, settings.command_retry_delay_seconds))
-        retry_before = now - timedelta(seconds=settings.command_ack_timeout_seconds)
-
-        try:
-            acked_cursor = self.device_commands.find({"status": COMMAND_STATUS_ACKED})
-            async for doc in acked_cursor:
-                updated = await self.device_commands.update_one(
-                    {"_id": doc["_id"], "status": COMMAND_STATUS_ACKED},
-                    {
-                        "$set": {
-                            "status": COMMAND_STATUS_COMPLETED,
-                            "completed_at": now,
-                        }
-                    },
-                )
-                if updated.modified_count > 0:
-                    summary["completed"] += 1
-                    DEVICE_COMMAND_COMPLETED_TOTAL.labels(
-                        command=doc.get("command", "unknown"),
-                    ).inc()
-
-            expirable_cursor = self.device_commands.find(
-                {
-                    "status": {"$in": [COMMAND_STATUS_QUEUED, COMMAND_STATUS_DISPATCHED]},
-                    "expires_at": {"$lte": now},
-                }
-            )
-            async for doc in expirable_cursor:
-                reason = "command ttl expired"
-                updated = await self.device_commands.update_one(
-                    {
-                        "_id": doc["_id"],
-                        "status": {"$in": [COMMAND_STATUS_QUEUED, COMMAND_STATUS_DISPATCHED]},
-                    },
-                    {
-                        "$set": {
-                            "status": COMMAND_STATUS_EXPIRED,
-                            "completed_at": now,
-                            "failure_reason": reason,
-                            "last_error": reason,
-                        }
-                    },
-                )
-                if updated.modified_count > 0:
-                    summary["expired"] += 1
-                    DEVICE_COMMAND_FAILED_TOTAL.labels(
-                        command=doc.get("command", "unknown"),
-                        reason="expired",
-                    ).inc()
-
-            timed_out_cursor = self.device_commands.find(
-                {
-                    "status": COMMAND_STATUS_DISPATCHED,
-                    "$or": [
-                        {"expires_at": {"$exists": False}},
-                        {"expires_at": None},
-                        {"expires_at": {"$gt": now}},
-                    ],
-                    "dispatched_at": {"$lte": retry_before},
-                }
-            )
-            async for doc in timed_out_cursor:
-                command_name = doc.get("command", "unknown")
-                DEVICE_COMMAND_TIMEOUT_TOTAL.labels(command=command_name).inc()
-                if int(doc.get("dispatch_count", 0)) < settings.command_max_dispatch_count:
-                    updated = await self.device_commands.update_one(
-                        {"_id": doc["_id"], "status": COMMAND_STATUS_DISPATCHED},
-                        {
-                            "$set": {
-                                "status": COMMAND_STATUS_QUEUED,
-                                "next_retry_at": retry_after,
-                                "last_error": "Command ACK timeout",
-                                "failure_reason": None,
-                            }
-                        },
-                    )
-                    if updated.modified_count > 0:
-                        summary["requeued"] += 1
-                        DEVICE_COMMAND_RETRY_TOTAL.labels(command=command_name).inc()
-                else:
-                    reason = "ack timeout exceeded"
-                    updated = await self.device_commands.update_one(
-                        {"_id": doc["_id"], "status": COMMAND_STATUS_DISPATCHED},
-                        {
-                            "$set": {
-                                "status": COMMAND_STATUS_FAILED,
-                                "completed_at": now,
-                                "failure_reason": reason,
-                                "last_error": reason,
-                            }
-                        },
-                    )
-                    if updated.modified_count > 0:
-                        summary["failed"] += 1
-                        DEVICE_COMMAND_FAILED_TOTAL.labels(
-                            command=command_name,
-                            reason="ack_timeout_exceeded",
-                        ).inc()
-            return summary
-        except Exception as exc:
-            logger.error("Recover stale device commands error: %s", exc)
-            return summary
-
-    async def count_commands_by_status(self) -> Dict[str, int]:
-        """Return current command counts grouped by status."""
-        if self.device_commands is None:
-            return {}
-        try:
-            pipeline = [
-                {"$group": {"_id": "$status", "count": {"$sum": 1}}},
-            ]
-            results = await self.device_commands.aggregate(pipeline).to_list(length=None)
-            return {item["_id"] or "unknown": int(item["count"]) for item in results}
-        except Exception as exc:
-            logger.error("Count commands by status error: %s", exc)
-            return {}
-
     # ===== User methods =====
 
     async def create_user(self, doc: Dict[str, Any]) -> bool:
@@ -1908,18 +1499,6 @@ class Database:
             return int(result.modified_count)
         except Exception as exc:
             logger.error("Auth sessions bulk revoke error: %s", exc)
-            return 0
-
-    async def count_pending_commands(self) -> int:
-        """Return current queue backlog for metrics and monitoring."""
-        if self.device_commands is None:
-            return 0
-        try:
-            return await self.device_commands.count_documents(
-                {"status": {"$in": list(ACTIVE_COMMAND_STATUSES)}}
-            )
-        except Exception as exc:
-            logger.error("Count pending commands error: %s", exc)
             return 0
 
     # ===== Utility methods =====

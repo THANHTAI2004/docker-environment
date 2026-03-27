@@ -44,7 +44,6 @@ class AlertService:
         thresholds = self._normalize_thresholds(device_thresholds)
 
         device_id = reading.get("device_id")
-        seq = reading.get("seq")
         timestamp = reading.get("timestamp", time.time())
 
         if not device_id:
@@ -63,7 +62,6 @@ class AlertService:
                         spo2,
                         thresholds["spo2_critical"],
                         f"Blood oxygen critically low ({spo2}%)",
-                        seq=seq,
                     )
                 )
             elif spo2 < thresholds["spo2_low"]:
@@ -77,7 +75,6 @@ class AlertService:
                         spo2,
                         thresholds["spo2_low"],
                         f"Blood oxygen below normal ({spo2}%)",
-                        seq=seq,
                     )
                 )
 
@@ -94,7 +91,6 @@ class AlertService:
                         temp,
                         thresholds["temp_critical"],
                         f"Temperature critically high ({temp}C)",
-                        seq=seq,
                     )
                 )
             elif temp >= thresholds["temp_high"]:
@@ -108,7 +104,6 @@ class AlertService:
                         temp,
                         thresholds["temp_high"],
                         f"Temperature above normal ({temp}C)",
-                        seq=seq,
                     )
                 )
             elif temp < thresholds["temp_low"]:
@@ -122,7 +117,6 @@ class AlertService:
                         temp,
                         thresholds["temp_low"],
                         f"Temperature below normal ({temp}C)",
-                        seq=seq,
                     )
                 )
 
@@ -139,7 +133,6 @@ class AlertService:
                         hr,
                         thresholds["hr_critical"],
                         f"Heart rate critically high ({hr} bpm)",
-                        seq=seq,
                     )
                 )
             elif hr >= thresholds["hr_high"]:
@@ -153,7 +146,6 @@ class AlertService:
                         hr,
                         thresholds["hr_high"],
                         f"Heart rate above normal ({hr} bpm)",
-                        seq=seq,
                     )
                 )
             elif hr < thresholds["hr_low_critical"]:
@@ -167,7 +159,6 @@ class AlertService:
                         hr,
                         thresholds["hr_low_critical"],
                         f"Heart rate critically low ({hr} bpm)",
-                        seq=seq,
                     )
                 )
             elif hr < thresholds["hr_low"]:
@@ -181,7 +172,6 @@ class AlertService:
                         hr,
                         thresholds["hr_low"],
                         f"Heart rate below normal ({hr} bpm)",
-                        seq=seq,
                     )
                 )
 
@@ -198,7 +188,6 @@ class AlertService:
                         rr,
                         thresholds["rr_high"],
                         f"Respiratory rate above normal ({rr} breaths/min)",
-                        seq=seq,
                     )
                 )
             elif rr < thresholds["rr_low"]:
@@ -212,7 +201,6 @@ class AlertService:
                         rr,
                         thresholds["rr_low"],
                         f"Respiratory rate below normal ({rr} breaths/min)",
-                        seq=seq,
                     )
                 )
 
@@ -229,7 +217,6 @@ class AlertService:
                         1,
                         0,
                         "ECG lead disconnected",
-                        seq=seq,
                     )
                 )
             elif ecg.get("quality") == "poor":
@@ -243,7 +230,6 @@ class AlertService:
                         0,
                         0,
                         "ECG signal quality is poor",
-                        seq=seq,
                     )
                 )
 
@@ -295,7 +281,6 @@ class AlertService:
         value: float,
         threshold: float,
         message: str,
-        seq: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Create an alert document."""
         alert = {
@@ -309,8 +294,6 @@ class AlertService:
             "message": message,
             "acknowledged": False,
         }
-        if seq is not None:
-            alert["seq"] = seq
         return alert
 
 

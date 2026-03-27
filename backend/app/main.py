@@ -2,7 +2,6 @@
 FastAPI backend for wearable health monitoring system.
 REST API + MongoDB for health data management.
 """
-import asyncio
 import logging
 import time
 import uuid
@@ -19,9 +18,7 @@ from pydantic import BaseModel
 from .config import settings
 from .db import db
 from .observability import (
-    DEVICE_COMMANDS_BY_STATUS,
     DB_PING_FAILURES,
-    PENDING_COMMANDS,
     RATE_LIMIT_HITS,
     REQUEST_COUNT,
     REQUEST_LATENCY,
@@ -63,24 +60,6 @@ def _request_device_id(path: str) -> str | None:
         return None
 
 
-async def _command_recovery_loop() -> None:
-    """Continuously reconcile timed-out or acknowledged device commands."""
-    interval = max(5, settings.command_recovery_interval_seconds)
-    while True:
-        try:
-            summary = await db.recover_stale_device_commands()
-            if any(summary.values()):
-                logger.info(
-                    "Command recovery cycle updated queue state",
-                    extra={"extra_fields": summary},
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.error("Command recovery loop failed: %s", exc, exc_info=True)
-        await asyncio.sleep(interval)
-
-
 # ===== Startup/Shutdown Lifespan =====
 
 @asynccontextmanager
@@ -90,16 +69,10 @@ async def lifespan(application: FastAPI):
     db.connect()
     await rate_limiter.connect()
     await db.create_indexes()
-    recovery_task = asyncio.create_task(_command_recovery_loop())
     logger.info("MongoDB connected and indexes created")
     logger.info("REST ingestion is enabled for ESP devices")
     yield
     # Shutdown: close MongoDB connection
-    recovery_task.cancel()
-    try:
-        await recovery_task
-    except asyncio.CancelledError:
-        pass
     await rate_limiter.close()
     if db.client:
         db.client.close()
@@ -335,10 +308,6 @@ async def health_check():
 @app.get("/metrics")
 async def metrics(_: None = Depends(require_metrics_access)):
     """Prometheus metrics endpoint."""
-    PENDING_COMMANDS.set(await db.count_pending_commands())
-    current_status = await db.count_commands_by_status()
-    for status_name in ("queued", "dispatched", "acked", "completed", "failed", "expired", "cancelled"):
-        DEVICE_COMMANDS_BY_STATUS.labels(status=status_name).set(current_status.get(status_name, 0))
     return Response(content=metrics_payload(), media_type=metrics_content_type())
 
 

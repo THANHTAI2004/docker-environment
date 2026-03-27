@@ -12,7 +12,7 @@ Cap nhat theo trang thai server hien tai: **2026-03-20**
 
 He thong nay la backend cho bai toan theo doi suc khoe bang thiet bi deo. Server co 3 nhom client chinh:
 
-- ESP32 wearable gui readings va nhan lenh ECG qua REST
+- ESP32 wearable gui readings qua REST
 - app mobile/web dang nhap bang user account va doc du lieu theo tung device
 - admin tool dung de bootstrap user, register device, xoay token ESP va van hanh he thong
 
@@ -72,7 +72,6 @@ Mobile/Web/Admin App
 
 FastAPI Backend
   -> Redis (rate limit)
-  -> MongoDB device_commands (ECG queue)
   -> Prometheus-style metrics
   -> structured logging
 ```
@@ -177,7 +176,7 @@ Refresh token la opaque token, duoc luu hash trong collection `auth_sessions`.
 
 Quyen du lieu device duoc suy ra tu `device_links.permission`:
 
-- `owner`: doc du lieu, xem linked users, them/xoa viewer, sua thresholds, request ECG, cancel command, rotate ESP token
+- `owner`: doc du lieu, xem linked users, them/xoa viewer, sua thresholds, rotate ESP token
 - `viewer`: doc du lieu va linked users
 
 ### Admin/bootstrap
@@ -234,14 +233,10 @@ ESP token va pairing code deu chi luu hash trong MongoDB.
 - `GET /api/v1/me/alerts`
 - `POST /api/v1/alerts/{alert_id}/acknowledge`
 - `POST /api/v1/health/readings`
-- `POST /api/v1/devices/{device_id}/ecg/request`
-- `POST /api/v1/devices/{device_id}/commands/{command_id}/cancel`
 
 ### ESP endpoints
 
 - `POST /api/v1/esp/devices/{device_id}/readings`
-- `GET /api/v1/esp/devices/{device_id}/commands/next`
-- `POST /api/v1/esp/devices/{device_id}/commands/{command_id}/ack`
 
 ## 8. Endpoint cu van con ton tai
 
@@ -277,7 +272,6 @@ Collections chinh:
 - `device_links`
 - `health_readings`
 - `alerts`
-- `device_commands`
 - `auth_sessions`
 - `audit_logs`
 - `readings` (legacy)
@@ -286,12 +280,10 @@ Index va retention dang duoc tao boi backend:
 
 - `health_readings.recorded_at`: TTL `90 ngay`
 - `alerts.recorded_at`: TTL `180 ngay`
-- `health_readings(device_id, seq)`: unique partial de dedupe
 - `devices.device_id`: unique
 - `users.user_id`: unique
 - `users.phone_number`: unique sparse
 - `device_links(device_id, user_id)`: unique
-- `device_commands.request_id`: unique sparse
 
 ## 10. Du lieu demo hien co tren server
 
@@ -342,13 +334,11 @@ So luong record hien tai:
 4. `alert_service` sinh alert neu vuot nguong
 5. app doc lai qua `latest`, `history`, `summary`, `alerts`, `ecg`
 
-### ECG on-demand
+### ECG continuous
 
-1. owner goi `POST /api/v1/devices/{device_id}/ecg/request`
-2. backend enqueue command vao `device_commands`
-3. ESP poll `GET /api/v1/esp/devices/{device_id}/commands/next`
-4. ESP gui ACK sau khi thuc thi
-5. recovery loop xu ly retry, completed, failed, expired, cancelled
+1. ESP do ECG lien tuc va gui waveform qua `POST /api/v1/esp/devices/{device_id}/readings`
+2. backend normalize va luu vao `health_readings.ecg`
+3. app doc lai qua `GET /api/v1/devices/{device_id}/ecg`
 
 ### Claim device
 
@@ -421,10 +411,6 @@ Gia tri dang chay tren server local hien tai:
 - `RATE_LIMIT_STORAGE`
 - `RATE_LIMIT_GENERAL_PER_MINUTE`
 - `RATE_LIMIT_ESP_PER_MINUTE`
-- `COMMAND_TTL_SECONDS`
-- `COMMAND_ACK_TIMEOUT_SECONDS`
-- `COMMAND_RETRY_DELAY_SECONDS`
-- `COMMAND_RECOVERY_INTERVAL_SECONDS`
 - `EXPOSE_API_DOCS`
 - `EXPOSE_METRICS`
 - `METRICS_TOKEN`

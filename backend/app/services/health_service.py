@@ -30,7 +30,7 @@ class HealthService:
             reading_data = dict(reading_data)
 
             if not reading_data.get("device_type"):
-                device_id = reading_data.get("device_id") or reading_data.get("device_uid")
+                device_id = reading_data.get("device_id")
                 if device_id:
                     device = await db.get_device(device_id)
                     if device and device.get("device_type"):
@@ -58,9 +58,8 @@ class HealthService:
             if insert_status == "duplicate":
                 ESP_DUPLICATE_READINGS_TOTAL.inc()
                 logger.info(
-                    "Skipping alert generation for duplicate reading device=%s seq=%s",
+                    "Skipping alert generation for duplicate reading device=%s",
                     reading.device_id,
-                    doc.get("seq"),
                 )
                 return True
 
@@ -113,15 +112,12 @@ class HealthService:
 
         doc: Dict[str, Any] = {
             "device_id": reading.device_id,
-            "device_uid": reading.device_id,
             "device_type": reading.device_type or "wrist",
             "timestamp": timestamp,
             "recorded_at": recorded_at,
             "received_at": received_at,
         }
 
-        if reading.seq is not None:
-            doc["seq"] = reading.seq
         if vitals:
             doc["vitals"] = vitals
             # Keep flat fields for simple querying and backward compatibility.

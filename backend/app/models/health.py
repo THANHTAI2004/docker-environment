@@ -3,7 +3,7 @@ Data models for wearable health monitoring system.
 """
 from datetime import datetime
 from typing import Optional, List
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class VitalsData(BaseModel):
@@ -42,15 +42,9 @@ class HealthReading(BaseModel):
     """Health reading from wearable device."""
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    # Accept both device_id and device_uid from device payload.
-    device_id: str = Field(
-        ...,
-        validation_alias=AliasChoices("device_id", "device_uid"),
-        description="Unique device identifier",
-    )
+    device_id: str = Field(..., description="Unique device identifier")
     device_type: Optional[str] = Field(default=None, description="wrist or chest")
     timestamp: Optional[float] = None
-    seq: Optional[int] = None
 
     # NEW: Nested vitals object (preferred format)
     vitals: Optional[VitalsData] = None
@@ -74,12 +68,6 @@ class HealthReading(BaseModel):
     
     # System fields (added by server)
     received_at: Optional[datetime] = None
-
-    @property
-    def device_uid(self) -> str:
-        """Backward-compatible alias for existing code paths."""
-        return self.device_id
-
 
 class HealthReadingDB(HealthReading):
     """Health reading as stored in database."""

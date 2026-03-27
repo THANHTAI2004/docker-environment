@@ -51,17 +51,9 @@ class Settings(BaseSettings):
     mongo_alerts_collection: str = "alerts"
     mongo_devices_collection: str = "devices"
     mongo_users_collection: str = "users"
-    mongo_commands_collection: str = "device_commands"
     mongo_audit_collection: str = "audit_logs"
     mongo_device_links_collection: str = "device_links"
     mongo_auth_sessions_collection: str = "auth_sessions"
-    command_ttl_seconds: int = 300
-    command_ack_timeout_seconds: int = 45
-    command_retry_delay_seconds: int = 5
-    command_recovery_interval_seconds: int = 15
-    command_max_dispatch_count: int = 3
-    command_max_pending_per_device: int = 3
-    command_dedupe_window_seconds: int = 20
     alert_dedupe_window_seconds: int = 120
     
     # Health Monitoring Alert Thresholds (defaults)

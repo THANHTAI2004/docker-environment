@@ -2,12 +2,10 @@
 Device management REST API endpoints.
 """
 import logging
-from datetime import datetime, timedelta
 import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-import uuid
 
 from ..db import db
 from ..models import (
@@ -16,7 +14,6 @@ from ..models import (
     DeviceLinkRequest,
     DeviceRegistration,
     DeviceViewerRequest,
-    ECGRequestCommand,
     ThresholdsUpdate,
 )
 from ..utils.access import (
@@ -362,69 +359,6 @@ async def get_device(device_id: str, current_user: dict = Depends(require_curren
         raise HTTPException(status_code=404, detail="Device not found")
     return filter_device_response(device, current_user)
 
-
-@router.post("/devices/{device_id}/ecg/request")
-async def request_ecg(
-    device_id: str,
-    command: ECGRequestCommand,
-    request: Request,
-    current_user: dict = Depends(require_current_user),
-):
-    """Queue ECG command; ESP will receive it via REST polling."""
-    await require_device_owner(current_user, device_id)
-
-    request_id = str(uuid.uuid4())
-    expires_at = datetime.utcnow() + timedelta(seconds=settings.command_ttl_seconds)
-    enqueue_result = await db.enqueue_device_command(
-        {
-            "device_id": device_id,
-            "request_id": request_id,
-            "command": "ecg_request",
-            "payload": {
-                "duration_seconds": command.duration_seconds,
-                "sampling_rate": command.sampling_rate,
-            },
-            "expires_at": expires_at,
-        }
-    )
-    if enqueue_result["status"] == "limit_reached":
-        raise HTTPException(status_code=409, detail="Too many pending commands for this device")
-    if enqueue_result["status"] == "error":
-        raise HTTPException(status_code=500, detail="Failed to enqueue command")
-    if enqueue_result["status"] == "duplicate":
-        return {
-            "status": "already_queued",
-            "delivery": "rest_polling",
-            "request_id": enqueue_result.get("request_id"),
-            "command_id": enqueue_result.get("command_id"),
-            "expires_at": enqueue_result.get("expires_at").isoformat()
-            if enqueue_result.get("expires_at")
-            else None,
-        }
-
-    await db.insert_audit_log(
-        {
-            "action": "device.ecg.request",
-            "actor_id": current_user["user_id"],
-            "actor_role": current_user.get("role"),
-            "target_id": device_id,
-            "request_id": request.state.request_id,
-            "details": {
-                "duration_seconds": command.duration_seconds,
-                "sampling_rate": command.sampling_rate,
-            },
-        }
-    )
-
-    return {
-        "status": "queued",
-        "delivery": "rest_polling",
-        "request_id": request_id,
-        "command_id": enqueue_result["command_id"],
-        "expires_at": expires_at.isoformat(),
-    }
-
-
 @router.patch("/devices/{device_id}/thresholds")
 async def update_device_thresholds(
     device_id: str,
@@ -736,28 +670,3 @@ async def get_public_device_summary(
     """Authenticated summary alias kept for backward compatibility."""
     logger.warning("Deprecated public device summary endpoint used for device=%s", device_id)
     return await _build_device_summary(device_id, period, current_user)
-
-
-@router.post("/devices/{device_id}/commands/{command_id}/cancel")
-async def cancel_device_command(
-    device_id: str,
-    command_id: str,
-    request: Request,
-    current_user: dict = Depends(require_current_user),
-):
-    """Cancel a queued or in-flight command."""
-    await require_device_owner(current_user, device_id)
-    success = await db.cancel_device_command(device_id, command_id, "Cancelled by device owner")
-    if not success:
-        raise HTTPException(status_code=404, detail="Command not found or already finished")
-    await db.insert_audit_log(
-        {
-            "action": "device.command.cancel",
-            "actor_id": current_user["user_id"],
-            "actor_role": current_user.get("role"),
-            "target_id": command_id,
-            "request_id": request.state.request_id,
-            "details": {"device_id": device_id},
-        }
-    )
-    return {"status": "cancelled", "command_id": command_id}

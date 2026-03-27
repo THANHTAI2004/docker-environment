@@ -11,9 +11,6 @@ def app_module(monkeypatch):
     async def noop_async(*args, **kwargs):
         return 0
 
-    async def noop_dict(*args, **kwargs):
-        return {}
-
     sessions = {}
 
     async def create_auth_session(doc):
@@ -72,9 +69,6 @@ def app_module(monkeypatch):
     monkeypatch.setattr(main.db, "create_indexes", noop_async)
     monkeypatch.setattr(main.rate_limiter, "connect", noop_async)
     monkeypatch.setattr(main.rate_limiter, "close", noop_async)
-    monkeypatch.setattr(main.db, "count_pending_commands", noop_async)
-    monkeypatch.setattr(main.db, "count_commands_by_status", noop_dict)
-    monkeypatch.setattr(main.db, "recover_stale_device_commands", noop_dict)
     monkeypatch.setattr(main.db, "create_auth_session", create_auth_session)
     monkeypatch.setattr(main.db, "get_auth_session", get_auth_session)
     monkeypatch.setattr(main.db, "get_auth_session_by_refresh_token_hash", get_auth_session_by_refresh_token_hash)
