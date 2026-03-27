@@ -1,6 +1,9 @@
 # Secrets
 .env
 backend/.env
+backend/secrets/
+*firebase*.json
+*service-account*.json
 
 # Local Python environments / IDE deps
 backend/.venv/

@@ -38,7 +38,7 @@ from .utils.auth import (
 from .utils.rate_limit import RateLimiter
 
 # Import API routers
-from .api import auth_router, health_router, alerts_router, devices_router, users_router, esp_router
+from .api import auth_router, health_router, alerts_router, devices_router, users_router, esp_router, push_router
 
 
 # Configure logging
@@ -256,6 +256,7 @@ app.include_router(alerts_router)
 app.include_router(devices_router)
 app.include_router(users_router)
 app.include_router(esp_router)
+app.include_router(push_router)
 
 
 # ===== Legacy Models =====

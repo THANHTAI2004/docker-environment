@@ -69,6 +69,8 @@ def app_module(monkeypatch):
     monkeypatch.setattr(main.db, "create_indexes", noop_async)
     monkeypatch.setattr(main.rate_limiter, "connect", noop_async)
     monkeypatch.setattr(main.rate_limiter, "close", noop_async)
+    main.rate_limiter._counts.clear()
+    main.rate_limiter._redis = None
     monkeypatch.setattr(main.db, "create_auth_session", create_auth_session)
     monkeypatch.setattr(main.db, "get_auth_session", get_auth_session)
     monkeypatch.setattr(main.db, "get_auth_session_by_refresh_token_hash", get_auth_session_by_refresh_token_hash)

@@ -102,7 +102,7 @@ class UserCreate(BaseModel):
 
 
 class ThresholdsUpdate(BaseModel):
-    """Update user alert thresholds."""
+    """Update device-scoped alert threshold overrides."""
     spo2_low: Optional[float] = None
     spo2_critical: Optional[float] = None
     temp_high: Optional[float] = None

@@ -54,7 +54,13 @@ class Settings(BaseSettings):
     mongo_audit_collection: str = "audit_logs"
     mongo_device_links_collection: str = "device_links"
     mongo_auth_sessions_collection: str = "auth_sessions"
+    mongo_push_tokens_collection: str = "push_tokens"
     alert_dedupe_window_seconds: int = 120
+    push_notifications_enabled: bool = False
+    push_notification_cooldown_seconds: int = 300
+    fcm_project_id: str = ""
+    fcm_service_account_path: str = ""
+    fcm_service_account_json: str = ""
     
     # Health Monitoring Alert Thresholds (defaults)
     # SpO2

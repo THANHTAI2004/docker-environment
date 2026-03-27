@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from ..config import settings
 from ..db import db
 from ..observability import ALERTS_CREATED_TOTAL
+from .push_notification_service import push_notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +244,10 @@ class AlertService:
                     severity=alert["severity"],
                     alert_type=alert["alert_type"],
                 ).inc()
-                inserted_alerts.append(alert)
+                stored_alert = dict(alert)
+                stored_alert["id"] = alert_id
+                await push_notification_service.send_alert_notification(stored_alert)
+                inserted_alerts.append(stored_alert)
 
         return inserted_alerts
 

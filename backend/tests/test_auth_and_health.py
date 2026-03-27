@@ -1750,7 +1750,6 @@ async def test_create_user_allows_admin_api_key_when_bootstrap_enabled(client, a
     payload = {
         "user_id": "patient-001",
         "name": "Patient One",
-        "role": "patient",
         "password": "VeryStrongPass1",
     }
 

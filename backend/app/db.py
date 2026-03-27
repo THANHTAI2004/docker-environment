@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 
 import motor.motor_asyncio
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from .config import settings
@@ -32,6 +33,7 @@ class Database:
         self.audit_logs = None
         self.device_links = None
         self.auth_sessions = None
+        self.push_tokens = None
 
     def connect(self):
         """Initialize MongoDB connection and collection references."""
@@ -45,6 +47,7 @@ class Database:
         self.audit_logs = self.db[settings.mongo_audit_collection]
         self.device_links = self.db[settings.mongo_device_links_collection]
         self.auth_sessions = self.db[settings.mongo_auth_sessions_collection]
+        self.push_tokens = self.db[settings.mongo_push_tokens_collection]
 
     async def _ensure_ttl_index(
         self,
@@ -145,6 +148,11 @@ class Database:
                 ttl_seconds=0,
             )
 
+            # Push tokens
+            await self.push_tokens.create_index([("user_id", 1), ("installation_id", 1)], unique=True)
+            await self.push_tokens.create_index([("user_id", 1), ("is_active", 1), ("last_seen_at", -1)])
+            await self._ensure_sparse_index(self.push_tokens, [("fcm_token", 1)])
+
             logger.info("MongoDB indexes created successfully")
         except Exception as exc:
             logger.error("Index creation error: %s", exc)
@@ -173,6 +181,10 @@ class Database:
             "last_refreshed_at",
             "revoked_at",
             "next_retry_at",
+            "last_seen_at",
+            "deactivated_at",
+            "push_attempted_at",
+            "push_dispatched_at",
         ):
             if isinstance(output.get(field), datetime):
                 output[field] = output[field].isoformat()
@@ -671,6 +683,52 @@ class Database:
             return result.modified_count > 0
         except Exception as exc:
             logger.error("Alert acknowledge error: %s", exc)
+            return False
+
+    async def get_recent_dispatched_alert(
+        self,
+        device_id: str,
+        alert_type: str,
+        timestamp: float,
+        cooldown_seconds: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Return the latest alert of the same type that already triggered a push within cooldown."""
+        if self.alerts is None or cooldown_seconds <= 0:
+            return None
+        try:
+            doc = await self.alerts.find_one(
+                {
+                    "device_id": device_id,
+                    "alert_type": alert_type,
+                    "timestamp": {
+                        "$gte": float(timestamp) - float(cooldown_seconds),
+                        "$lt": float(timestamp),
+                    },
+                    "push_dispatched_at": {"$exists": True, "$ne": None},
+                },
+                sort=[("timestamp", -1)],
+            )
+            return self._serialize_doc(doc) if doc else None
+        except Exception as exc:
+            logger.error("Recent dispatched alert query error: %s", exc)
+            return None
+
+    async def update_alert_push_status(self, alert_id: str, fields: Dict[str, Any]) -> bool:
+        """Persist push delivery metadata on one alert."""
+        if self.alerts is None:
+            return False
+        try:
+            from bson import ObjectId
+
+            payload = {key: value for key, value in fields.items() if value is not None}
+            payload["updated_at"] = datetime.utcnow()
+            result = await self.alerts.update_one(
+                {"_id": ObjectId(alert_id)},
+                {"$set": payload},
+            )
+            return result.matched_count > 0
+        except Exception as exc:
+            logger.error("Alert push status update error: %s", exc)
             return False
 
     # ===== Device methods =====
@@ -1500,6 +1558,133 @@ class Database:
         except Exception as exc:
             logger.error("Auth sessions bulk revoke error: %s", exc)
             return 0
+
+    # ===== Push token methods =====
+
+    async def upsert_push_token(
+        self,
+        user_id: str,
+        installation_id: str,
+        fcm_token: str,
+        platform: str,
+        session_id: Optional[str] = None,
+    ) -> str:
+        """Create or refresh one push token registration for a user installation."""
+        if self.push_tokens is None:
+            return "error"
+        try:
+            now = datetime.utcnow()
+            update_doc: Dict[str, Any] = {
+                "user_id": user_id,
+                "installation_id": installation_id,
+                "fcm_token": fcm_token,
+                "platform": platform,
+                "is_active": True,
+                "last_seen_at": now,
+                "updated_at": now,
+            }
+            if session_id:
+                update_doc["session_id"] = session_id
+
+            result = await self.push_tokens.update_one(
+                {"user_id": user_id, "installation_id": installation_id},
+                {
+                    "$set": update_doc,
+                    "$setOnInsert": {"created_at": now},
+                    "$unset": {"deactivated_at": ""},
+                },
+                upsert=True,
+            )
+            await self.push_tokens.update_many(
+                {
+                    "fcm_token": fcm_token,
+                    "$or": [
+                        {"user_id": {"$ne": user_id}},
+                        {"installation_id": {"$ne": installation_id}},
+                    ],
+                    "is_active": True,
+                },
+                {
+                    "$set": {
+                        "is_active": False,
+                        "deactivated_at": now,
+                        "updated_at": now,
+                        "deactivation_reason": "token_reassigned",
+                    }
+                },
+            )
+            if result.upserted_id is not None:
+                return "created"
+            if result.modified_count > 0:
+                return "updated"
+            return "unchanged"
+        except DuplicateKeyError:
+            logger.warning("Push token duplicate for user=%s installation=%s", user_id, installation_id)
+            return "error"
+        except Exception as exc:
+            logger.error("Push token upsert error: %s", exc)
+            return "error"
+
+    async def deactivate_push_token(self, user_id: str, installation_id: str) -> bool:
+        """Deactivate one push token registration for a user installation."""
+        if self.push_tokens is None:
+            return False
+        try:
+            result = await self.push_tokens.update_one(
+                {"user_id": user_id, "installation_id": installation_id},
+                {
+                    "$set": {
+                        "is_active": False,
+                        "deactivated_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow(),
+                        "deactivation_reason": "user_logout",
+                    }
+                },
+            )
+            return result.matched_count > 0
+        except Exception as exc:
+            logger.error("Push token deactivate error: %s", exc)
+            return False
+
+    async def deactivate_push_tokens_by_fcm_tokens(self, fcm_tokens: List[str]) -> int:
+        """Deactivate invalid FCM tokens after the push provider rejects them."""
+        if self.push_tokens is None or not fcm_tokens:
+            return 0
+        try:
+            result = await self.push_tokens.update_many(
+                {
+                    "fcm_token": {"$in": list(set(fcm_tokens))},
+                    "is_active": True,
+                },
+                {
+                    "$set": {
+                        "is_active": False,
+                        "deactivated_at": datetime.utcnow(),
+                        "updated_at": datetime.utcnow(),
+                        "deactivation_reason": "provider_invalid",
+                    }
+                },
+            )
+            return int(result.modified_count)
+        except Exception as exc:
+            logger.error("Push token bulk deactivate error: %s", exc)
+            return 0
+
+    async def list_active_push_tokens(self, user_ids: List[str]) -> List[Dict[str, Any]]:
+        """Return active push tokens for the requested users."""
+        if self.push_tokens is None or not user_ids:
+            return []
+        try:
+            cursor = self.push_tokens.find(
+                {
+                    "user_id": {"$in": user_ids},
+                    "is_active": True,
+                }
+            ).sort("last_seen_at", -1)
+            return [self._serialize_doc(doc) async for doc in cursor]
+        except Exception as exc:
+            logger.error("Active push token query error: %s", exc)
+            return []
 
     # ===== Utility methods =====
 

@@ -26,7 +26,7 @@ Request:
 
 ```json
 {
-  "user_id": "patient-001",
+  "phone_number": "+84911100401",
   "password": "PatientPass1"
 }
 ```
@@ -41,9 +41,7 @@ Response:
   "expires_at": "2026-03-13T11:55:37.198839+00:00",
   "refresh_expires_at": "2026-04-12T11:55:37.198839+00:00",
   "session_id": "session-id",
-  "user_id": "patient-001",
-  "role": "patient",
-  "scopes": ["patient"]
+  "user_id": "user-owner-401"
 }
 ```
 
@@ -75,11 +73,13 @@ Dung de hien thi ten, role, email, phone, trang thai active.
 
 ## Luong app khuyen nghi
 
-1. Dang nhap bang `user_id` va `password`.
-2. Goi `GET /api/v1/me/devices` de lay danh sach thiet bi da lien ket.
-3. User chon 1 thiet bi trong danh sach.
-4. Goi `latest`, `history`, `summary` de hien thi chi so.
-5. Neu can man hinh quan ly, goi `linked-users` de xem ai dang lien ket voi thiet bi.
+1. Dang nhap bang `phone_number` va `password`.
+2. Goi `POST /api/v1/me/push-tokens` ngay sau login de dang ky FCM token hien tai.
+3. Goi `GET /api/v1/me/devices` de lay danh sach thiet bi da lien ket.
+4. User chon 1 thiet bi trong danh sach.
+5. Goi `latest`, `history`, `summary` de hien thi chi so.
+6. Neu can man hinh quan ly, goi `linked-users` de xem ai dang lien ket voi thiet bi.
+7. Logout thi goi `DELETE /api/v1/me/push-tokens/{installation_id}` truoc hoac cung luc voi `POST /api/v1/auth/logout`.
 
 ## Device Linking
 
@@ -181,6 +181,33 @@ Truong chinh:
 - `status`
 - `alert_thresholds`
 
+### Cap nhat nguong canh bao
+
+`PATCH /api/v1/devices/{device_id}/thresholds`
+
+Chi `owner` moi duoc sua. Payload dung field phang:
+
+```json
+{
+  "spo2_low": 92,
+  "spo2_critical": 86,
+  "temp_high": 37.8,
+  "temp_critical": 39.2,
+  "temp_low": 35.8,
+  "hr_low": 52,
+  "hr_low_critical": 42,
+  "hr_high": 115,
+  "hr_critical": 145,
+  "rr_low": 11,
+  "rr_high": 24
+}
+```
+
+Ghi chu:
+- app co the gui mot phan payload, khong can day du tat ca field
+- backend luu vao document device o ca `settings.alert_thresholds` va `alert_thresholds`
+- reading moi tu ESP se dung nguong moi nay de sinh alert
+
 ### Chi so moi nhat
 
 `GET /api/v1/devices/{device_id}/latest`
@@ -248,6 +275,41 @@ Nhung route sau van ton tai, nhung khong con public that su. Chung van bat buoc 
 - `GET /api/v1/public/devices/{device_id}/ecg`
 
 App moi nen uu tien dung nhom `/api/v1/devices/...`.
+
+## Push Notifications
+
+### Dang ky FCM token
+
+`POST /api/v1/me/push-tokens`
+
+Request:
+
+```json
+{
+  "installation_id": "android-owner-401",
+  "fcm_token": "<firebase-registration-token>",
+  "platform": "android"
+}
+```
+
+Ghi chu:
+- goi sau login hoac moi lan FCM token thay doi
+- `platform`: `android`, `ios`, hoac `web`
+
+### Go token khi logout
+
+`DELETE /api/v1/me/push-tokens/{installation_id}`
+
+Ghi chu:
+- nen goi khi user logout de backend deactivate token
+- backend giu lich su token nhung danh dau `is_active=false`
+
+### Rule nhan push
+
+- `owner` va `viewer` dang con linked deu co the nhan push
+- chi `owner` moi duoc acknowledge alert
+- push cung `alert_type` se cooldown `5 phut`
+- neu severity tang tu `warning` len `critical`, push moi van duoc gui ngay ca khi dang trong cooldown
 
 ## ECG
 

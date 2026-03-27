@@ -6,7 +6,7 @@ README nay mo ta trang thai hien tai cua server trong repo `docker-environment`,
 - `docker-compose.yml` va `.env` dang chay
 - MongoDB da duoc reset va seed lai bo du lieu demo `*-401`
 
-Cap nhat theo trang thai server hien tai: **2026-03-20**
+Cap nhat theo trang thai server hien tai: **2026-03-27**
 
 ## 1. Tong quan
 
@@ -121,9 +121,13 @@ backend/
       alerts.py
       health.py
       esp.py
+      push.py
     services/
       health_service.py
       alert_service.py
+      push_notification_service.py
+    models/
+      push.py
     utils/
       auth.py
       access.py
@@ -179,6 +183,11 @@ Quyen du lieu device duoc suy ra tu `device_links.permission`:
 - `owner`: doc du lieu, xem linked users, them/xoa viewer, sua thresholds, rotate ESP token
 - `viewer`: doc du lieu va linked users
 
+Rule canh bao hien tai:
+
+- `owner` va `viewer` deu nam trong `recipient_user_ids` cua alert
+- chi `owner` moi duoc `POST /api/v1/alerts/{alert_id}/acknowledge`
+
 ### Admin/bootstrap
 
 Co 2 luong tao user:
@@ -207,6 +216,8 @@ ESP token va pairing code deu chi luu hash trong MongoDB.
 - `POST /api/v1/auth/refresh`
 - `POST /api/v1/auth/logout`
 - `GET /api/v1/auth/me`
+- `POST /api/v1/me/push-tokens`
+- `DELETE /api/v1/me/push-tokens/{installation_id}`
 
 ### User va ownership
 
@@ -233,6 +244,31 @@ ESP token va pairing code deu chi luu hash trong MongoDB.
 - `GET /api/v1/me/alerts`
 - `POST /api/v1/alerts/{alert_id}/acknowledge`
 - `POST /api/v1/health/readings`
+
+### Threshold payload va push flow
+
+`PATCH /api/v1/devices/{device_id}/thresholds` nhan payload field phang:
+
+- `spo2_low`
+- `spo2_critical`
+- `temp_high`
+- `temp_critical`
+- `temp_low`
+- `hr_low`
+- `hr_low_critical`
+- `hr_high`
+- `hr_critical`
+- `rr_low`
+- `rr_high`
+
+Backend luu dong thoi vao `settings.alert_thresholds` va `alert_thresholds` tren document device.
+
+Push notification flow hien tai:
+
+- app login xong goi `POST /api/v1/me/push-tokens`
+- app logout thi goi `DELETE /api/v1/me/push-tokens/{installation_id}`
+- alert moi se duoc gui push cho `owner` + `viewer` con active token
+- push cung loai alert se bi cooldown `5 phut`, nhung van duoc gui lai neu severity tang tu `warning` len `critical`
 
 ### ESP endpoints
 
@@ -273,6 +309,7 @@ Collections chinh:
 - `health_readings`
 - `alerts`
 - `auth_sessions`
+- `push_tokens`
 - `audit_logs`
 - `readings` (legacy)
 
@@ -331,8 +368,10 @@ So luong record hien tai:
 1. ESP goi `POST /api/v1/esp/devices/{device_id}/readings` kem `X-Device-Token`
 2. backend validate token va payload
 3. `health_service` normalize va luu vao `health_readings`
-4. `alert_service` sinh alert neu vuot nguong
-5. app doc lai qua `latest`, `history`, `summary`, `alerts`, `ecg`
+4. backend lay `alert_thresholds` cua device va truyen vao `alert_service`
+5. `alert_service` sinh alert neu vuot nguong, gan `recipient_user_ids`
+6. neu co push token active, server gui push qua FCM theo rule cooldown/escalation
+7. app doc lai qua `latest`, `history`, `summary`, `alerts`, `ecg`
 
 ### ECG continuous
 
@@ -416,6 +455,36 @@ Gia tri dang chay tren server local hien tai:
 - `METRICS_TOKEN`
 - `METRICS_ALLOW_IPS`
 - `ALLOW_ADMIN_API_KEY_BOOTSTRAP`
+
+### Push notifications
+
+- `PUSH_NOTIFICATIONS_ENABLED`
+- `PUSH_NOTIFICATION_COOLDOWN_SECONDS`
+- `MONGO_PUSH_TOKENS_COLLECTION`
+- `FCM_PROJECT_ID`
+- `FCM_SERVICE_ACCOUNT_PATH`
+- `FCM_SERVICE_ACCOUNT_JSON`
+
+### Firebase config nhanh
+
+Khuyen nghi cho Docker Compose:
+
+1. tao service account cho Firebase project cua app
+2. copy JSON key thanh mot dong
+3. dien vao `.env`:
+
+```env
+PUSH_NOTIFICATIONS_ENABLED=true
+PUSH_NOTIFICATION_COOLDOWN_SECONDS=300
+FCM_PROJECT_ID=<firebase-project-id>
+FCM_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"<firebase-project-id>","private_key_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n","client_email":"firebase-adminsdk-xxx@<firebase-project-id>.iam.gserviceaccount.com","client_id":"...","token_uri":"https://oauth2.googleapis.com/token"}
+```
+
+Ghi chu:
+
+- voi Docker, `FCM_SERVICE_ACCOUNT_JSON` de dung hon `FCM_SERVICE_ACCOUNT_PATH`
+- chi bat `PUSH_NOTIFICATIONS_ENABLED=true` sau khi da dien xong `FCM_PROJECT_ID` va service account
+- app login xong phai goi `POST /api/v1/me/push-tokens`
 
 ## 14. Docs, metrics va logging
 

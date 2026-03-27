@@ -22,6 +22,7 @@ from .auth import (
     RegisterRequest,
     TokenResponse,
 )
+from .push import PushToken, PushTokenDB, PushTokenUpsertRequest
 
 __all__ = [
     "HealthReading",
@@ -54,4 +55,7 @@ __all__ = [
     "RefreshRequest",
     "LogoutResponse",
     "TokenResponse",
+    "PushToken",
+    "PushTokenDB",
+    "PushTokenUpsertRequest",
 ]
