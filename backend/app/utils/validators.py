@@ -19,11 +19,11 @@ def validate_vital_signs(data: Dict[str, Any]) -> tuple[bool, Optional[List[str]
         if not (70 <= spo2 <= 100):
             errors.append(f"SpO2 out of range: {spo2}% (expected 70-100%)")
     
-    # Temperature validation (30-45°C)
+    # Temperature validation (25-45°C)
     if "temperature" in data and data["temperature"] is not None:
         temp = data["temperature"]
-        if not (30 <= temp <= 45):
-            errors.append(f"Temperature out of range: {temp}°C (expected 30-45°C)")
+        if not (25 <= temp <= 45):
+            errors.append(f"Temperature out of range: {temp}°C (expected 25-45°C)")
     
     # Heart rate validation (20-300 bpm)
     if "heart_rate" in data and data["heart_rate"] is not None:

@@ -10,7 +10,7 @@ class VitalsData(BaseModel):
     """Nested vitals object for new format."""
     heart_rate: Optional[int] = Field(None, ge=0, le=300, description="Heart rate bpm")
     spo2: Optional[float] = Field(None, ge=0, le=100, description="Blood oxygen saturation %")
-    temperature: Optional[float] = Field(None, ge=30, le=45, description="Body temperature °C")
+    temperature: Optional[float] = Field(None, ge=25, le=45, description="Body temperature °C")
 
 
 class MetadataInfo(BaseModel):
@@ -51,7 +51,7 @@ class HealthReading(BaseModel):
     
     # DEPRECATED: Flat vitals fields (backward compatibility)
     spo2: Optional[float] = Field(None, ge=0, le=100, description="Blood oxygen saturation % (deprecated, use vitals.spo2)")
-    temperature: Optional[float] = Field(None, ge=30, le=45, description="Body temperature °C (deprecated, use vitals.temperature)")
+    temperature: Optional[float] = Field(None, ge=25, le=45, description="Body temperature °C (deprecated, use vitals.temperature)")
     heart_rate: Optional[int] = Field(None, ge=0, le=300, description="Heart rate bpm (deprecated, use vitals.heart_rate)")
     fall: Optional[bool] = Field(None, description="True when the device detected a fall")
     fall_phase: Optional[str] = Field(None, max_length=64, description="Firmware-reported fall state")
