@@ -277,8 +277,21 @@ Push notification flow hien tai:
 
 Payload ESP moi co the gui them:
 
+- `payload_type`: `vitals`, `ecg_batch`, `fall_alert`
 - `fall`: `true|false`
-- `fall_phase`: vi du `IDLE`, `IMPACT`, ...
+- `fall_phase` hoac `fall_state`: vi du `IDLE`, `IMPACT`, `DETECTED`
+- `vitals.quality`
+- `ecg.window_seconds`
+- `ecg.sample_count`
+- `ecg.captured_at_ms`
+- `metadata.schema_version`
+- `metadata.bridge_quality`
+- `metadata.bridge_fresh`
+- `metadata.c3_online`
+- `metadata.mpu_online`
+- `metadata.sensor_state`
+- `metadata.device_name`
+- `metadata.sensor_id`
 
 Khi `fall=true`, backend tao alert `fall_detected` muc `critical` va neu co FCM token active thi se day push len dien thoai.
 

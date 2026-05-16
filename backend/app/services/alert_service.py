@@ -176,7 +176,7 @@ class AlertService:
                 )
 
         if reading.get("fall") is True:
-            fall_phase = reading.get("fall_phase")
+            fall_phase = reading.get("fall_phase") or reading.get("fall_state")
             message = "Phát hiện té ngã"
             if fall_phase:
                 message = f"Phát hiện té ngã ({self._localize_fall_phase(fall_phase)})"
@@ -208,7 +208,7 @@ class AlertService:
                         "Điện cực ECG bị ngắt kết nối",
                     )
                 )
-            elif ecg.get("quality") == "poor":
+            elif str(ecg.get("quality") or "").lower() == "poor":
                 alerts.append(
                     self._create_alert(
                         device_id,

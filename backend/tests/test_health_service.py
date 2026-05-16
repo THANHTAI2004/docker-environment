@@ -267,3 +267,86 @@ async def test_fall_payload_and_upload_reason_are_persisted_and_forwarded(monkey
     assert captured["doc"]["upload_reason"] == "routine"
     assert "respiratory_rate" not in captured["doc"].get("vitals", {})
     assert captured["alert_doc"]["fall"] is True
+
+
+@pytest.mark.asyncio
+async def test_new_three_board_payload_fields_are_persisted_and_normalized(monkeypatch):
+    captured = {}
+
+    async def fake_get_device(device_id):
+        return {"device_id": device_id, "device_type": "chest", "alert_thresholds": {}}
+
+    async def fake_insert_health_reading(doc):
+        captured["doc"] = doc
+        return "inserted"
+
+    async def fake_update_device_last_seen(device_id):
+        return True
+
+    async def fake_update_device_metadata(device_id, metadata):
+        captured["metadata"] = metadata
+        return True
+
+    async def fake_check_health_reading(doc, thresholds):
+        captured["alert_doc"] = doc
+        return []
+
+    monkeypatch.setattr(health_service_module.db, "get_device", fake_get_device)
+    monkeypatch.setattr(health_service_module.db, "insert_health_reading", fake_insert_health_reading)
+    monkeypatch.setattr(health_service_module.db, "update_device_last_seen", fake_update_device_last_seen)
+    monkeypatch.setattr(health_service_module.db, "update_device_metadata", fake_update_device_metadata)
+    monkeypatch.setattr(health_service_module.alert_service, "check_health_reading", fake_check_health_reading)
+
+    success = await health_service.process_health_reading(
+        {
+            "device_id": "dev-3board-001",
+            "timestamp": 1715670000.123,
+            "device_type": "chest",
+            "payload_type": "ecg_batch",
+            "fall": True,
+            "fall_state": "DETECTED",
+            "vitals": {
+                "heart_rate": 78,
+                "spo2": 98,
+                "temperature": 36.7,
+                "quality": 85,
+            },
+            "ecg": {
+                "waveform": [0.012, -0.034, 0.521],
+                "sampling_rate": 250,
+                "window_seconds": 3,
+                "sample_count": 750,
+                "captured_at_ms": 45678,
+                "quality": "GOOD",
+                "lead_off": False,
+                "ecg_hr": 72,
+            },
+            "metadata": {
+                "schema_version": "2026-04-new-3board",
+                "signal_strength": -65,
+                "bridge_quality": 85,
+                "bridge_fresh": True,
+                "c3_online": True,
+                "mpu_online": True,
+                "sensor_state": "ACTIVE",
+                "device_name": "Vitals-1234",
+                "sensor_id": "SEN-XXXXXXXX",
+            },
+        }
+    )
+
+    assert success is True
+    assert captured["doc"]["payload_type"] == "ecg_batch"
+    assert captured["doc"]["vitals"]["quality"] == 85
+    assert captured["doc"]["quality"] == 85
+    assert captured["doc"]["ecg"]["window_seconds"] == 3
+    assert captured["doc"]["ecg"]["sample_count"] == 750
+    assert captured["doc"]["ecg"]["captured_at_ms"] == 45678
+    assert captured["doc"]["ecg"]["quality"] == "good"
+    assert captured["doc"]["fall_phase"] == "DETECTED"
+    assert captured["doc"]["fall_state"] == "DETECTED"
+    assert captured["doc"]["metadata"]["schema_version"] == "2026-04-new-3board"
+    assert captured["doc"]["metadata"]["bridge_quality"] == 85
+    assert captured["doc"]["metadata"]["device_name"] == "Vitals-1234"
+    assert captured["metadata"]["sensor_id"] == "SEN-XXXXXXXX"
+    assert captured["alert_doc"]["payload_type"] == "ecg_batch"

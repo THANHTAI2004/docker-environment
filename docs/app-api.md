@@ -242,9 +242,11 @@ Truong chinh:
 - `timestamp`
 - `fall`
 - `fall_phase`
+- `fall_state`
 - `vitals.heart_rate`
 - `vitals.spo2`
 - `vitals.temperature`
+- `vitals.quality`
 - `metadata.battery_level`
 - `metadata.signal_strength`
 
@@ -290,41 +292,96 @@ Response:
 }
 ```
 
-### ESP payload co ho tro fall detection
+### ESP payload types
 
 `POST /api/v1/esp/devices/{device_id}/readings`
 
-Payload vi du:
+Bridge/thiet bi hien tai co 3 payload chinh. Backend van giu tuong thich nguoc voi schema cu.
+
+#### 1. Vitals
 
 ```json
 {
-  "timestamp": 1712345678.123,
+  "timestamp": 1715670000.123,
   "device_type": "chest",
-  "fall": false,
-  "fall_phase": "IDLE",
+  "payload_type": "vitals",
   "vitals": {
-    "heart_rate": 72,
+    "heart_rate": 78,
     "spo2": 98,
-    "temperature": 36.7
-  },
-  "ecg": {
-    "waveform": [0.01, 0.02, 0.01],
-    "sampling_rate": 250,
-    "quality": "good",
-    "lead_off": false,
-    "ecg_hr": 71
+    "temperature": 36.7,
+    "quality": 85
   },
   "metadata": {
-    "battery_level": 95,
+    "schema_version": "2026-04-new-3board",
+    "signal_strength": -65,
+    "bridge_quality": 85,
+    "bridge_fresh": true,
+    "c3_online": true,
+    "mpu_online": true,
+    "sensor_state": "ACTIVE",
+    "device_name": "Vitals-1234",
+    "sensor_id": "SEN-XXXXXXXX"
+  }
+}
+```
+
+#### 2. ECG batch
+
+```json
+{
+  "timestamp": 1715670000.123,
+  "device_type": "chest",
+  "payload_type": "ecg_batch",
+  "ecg": {
+    "waveform": [0.012, -0.034, 0.521],
+    "sampling_rate": 250,
+    "window_seconds": 3,
+    "sample_count": 750,
+    "captured_at_ms": 45678,
+    "quality": "GOOD",
+    "lead_off": false,
+    "ecg_hr": 72
+  },
+  "metadata": {
     "signal_strength": -62,
-    "signal_quality": 84,
-    "upload_reason": "routine",
-    "firmware_version": "esp32-s3-gateway-nimble-v1"
+    "bridge_quality": 85,
+    "bridge_fresh": true,
+    "c3_online": true,
+    "mpu_online": true,
+    "sensor_state": "ACTIVE",
+    "device_name": "Vitals-1234",
+    "sensor_id": "SEN-XXXXXXXX"
+  }
+}
+```
+
+#### 3. Fall alert
+
+```json
+{
+  "timestamp": 1715670000.123,
+  "device_type": "chest",
+  "payload_type": "fall_alert",
+  "fall": true,
+  "fall_state": "DETECTED",
+  "metadata": {
+    "schema_version": "2026-04-new-3board",
+    "signal_strength": -65,
+    "bridge_quality": 85,
+    "bridge_fresh": true,
+    "c3_online": true,
+    "mpu_online": true,
+    "sensor_state": "ACTIVE",
+    "device_name": "Vitals-1234",
+    "sensor_id": "SEN-XXXXXXXX"
   }
 }
 ```
 
 Ghi chu:
+- `payload_type` hien co cac gia tri bridge dang gui: `vitals`, `ecg_batch`, `fall_alert`
+- backend chap nhan ca `fall_phase` va `fall_state`; server luu noi bo theo `fall_phase` de giu tuong thich
+- `ecg.quality` co the gui dang `GOOD|FAIR|POOR`; backend normalize ve lowercase khi luu va xu ly alert
 - backend bo qua `respiratory_rate`
 - khi `fall=true`, backend tao alert `fall_detected` muc `critical` va day push neu user da dang ky FCM token
 

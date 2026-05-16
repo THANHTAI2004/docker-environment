@@ -107,6 +107,8 @@ class HealthService:
         ecg = None
         if reading.ecg:
             ecg = reading.ecg.model_dump(exclude_none=True)
+            if ecg.get("quality") is not None:
+                ecg["quality"] = str(ecg["quality"]).strip().lower()
             if ecg.get("duration") is None and ecg.get("sampling_rate") and ecg.get("waveform"):
                 ecg["duration"] = round(len(ecg["waveform"]) / float(ecg["sampling_rate"]), 3)
 
@@ -117,6 +119,8 @@ class HealthService:
             "recorded_at": recorded_at,
             "received_at": received_at,
         }
+        if reading.payload_type is not None:
+            doc["payload_type"] = reading.payload_type
 
         if vitals:
             doc["vitals"] = vitals
@@ -138,6 +142,7 @@ class HealthService:
             doc["fall"] = reading.fall
         if reading.fall_phase is not None:
             doc["fall_phase"] = reading.fall_phase
+            doc["fall_state"] = reading.fall_phase
         if reading.location:
             doc["location"] = reading.location.model_dump(exclude_none=True)
 
