@@ -61,7 +61,13 @@ class DeviceRegistration(BaseModel):
     )
 
 
+class DeviceUpdate(BaseModel):
+    """Admin-editable device fields."""
+    device_name: Optional[str] = None
+    firmware_version: Optional[str] = None
+    status: Optional[str] = Field(default=None, pattern="^(active|inactive|maintenance)$")
+
+
 class DeviceClaimRequest(BaseModel):
     """Claim payload that proves physical access to a device."""
     pairing_code: str = Field(..., min_length=6, max_length=32)
-

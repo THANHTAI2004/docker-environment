@@ -2,6 +2,7 @@
 MongoDB database operations for health monitoring.
 """
 import logging
+import re
 import secrets
 from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
@@ -799,6 +800,90 @@ class Database:
             logger.error("Device query error: %s", exc)
             return None
 
+    async def list_registered_devices(
+        self,
+        limit: int = 500,
+        device_id: Optional[str] = None,
+        linked_user_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List registered devices for admin screens."""
+        if self.devices is None:
+            return []
+        try:
+            query: Dict[str, Any] = {}
+            if device_id:
+                query["device_id"] = {"$regex": re.escape(device_id), "$options": "i"}
+            if linked_user_id:
+                if self.device_links is None:
+                    return []
+                link_query = {"user_id": {"$regex": re.escape(linked_user_id), "$options": "i"}}
+                device_ids = [
+                    doc["device_id"]
+                    async for doc in self.device_links.find(link_query, {"device_id": 1})
+                    if doc.get("device_id")
+                ]
+                if not device_ids:
+                    return []
+                query["device_id"] = {"$in": sorted(set(device_ids))}
+                if device_id:
+                    query["device_id"] = {
+                        "$in": [item for item in sorted(set(device_ids)) if device_id.lower() in str(item).lower()]
+                    }
+            cursor = self.devices.find(query).sort("registered_at", -1).limit(limit)
+            return [self._serialize_doc(doc) async for doc in cursor]
+        except Exception as exc:
+            logger.error("List registered devices error: %s", exc)
+            return []
+
+    async def update_registered_device(self, device_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update admin-editable device fields and return the new document."""
+        if self.devices is None:
+            return None
+        payload = {key: value for key, value in fields.items() if value is not None}
+        if not payload:
+            return await self.get_device(device_id)
+        payload["updated_at"] = datetime.utcnow()
+        try:
+            doc = await self.devices.find_one_and_update(
+                {"device_id": device_id},
+                {"$set": payload},
+                return_document=ReturnDocument.AFTER,
+            )
+            return self._serialize_doc(doc) if doc else None
+        except Exception as exc:
+            logger.error("Update registered device error: %s", exc)
+            return None
+
+    async def delete_registered_device(self, device_id: str) -> Dict[str, int | bool]:
+        """Delete one device and related records."""
+        result = {
+            "deleted": False,
+            "device_links_deleted": 0,
+            "readings_deleted": 0,
+            "alerts_deleted": 0,
+        }
+        if self.devices is None:
+            return result
+        try:
+            delete_result = await self.devices.delete_one({"device_id": device_id})
+            result["deleted"] = delete_result.deleted_count > 0
+            if not result["deleted"]:
+                return result
+
+            if self.device_links is not None:
+                links_result = await self.device_links.delete_many({"device_id": device_id})
+                result["device_links_deleted"] = int(links_result.deleted_count)
+            if self.health_readings is not None:
+                readings_result = await self.health_readings.delete_many({"device_id": device_id})
+                result["readings_deleted"] = int(readings_result.deleted_count)
+            if self.alerts is not None:
+                alerts_result = await self.alerts.delete_many({"device_id": device_id})
+                result["alerts_deleted"] = int(alerts_result.deleted_count)
+            return result
+        except Exception as exc:
+            logger.error("Delete registered device error: %s", exc)
+            return result
+
     async def get_device_internal(self, device_id: str) -> Optional[Dict[str, Any]]:
         """Get raw device document for internal authorization flows."""
         if self.devices is None:
@@ -825,6 +910,26 @@ class Database:
             return result.modified_count > 0
         except Exception as exc:
             logger.error("Set device token hash error: %s", exc)
+            return False
+
+    async def set_device_pairing_code_hash(self, device_id: str, pairing_code_hash: str) -> bool:
+        """Set or rotate one device pairing code hash."""
+        if self.devices is None:
+            return False
+        try:
+            result = await self.devices.update_one(
+                {"device_id": device_id},
+                {
+                    "$set": {
+                        "pairing_code_hash": pairing_code_hash,
+                        "pairing_code_rotated_at": datetime.utcnow(),
+                    },
+                    "$unset": {"pairing_code_claimed_at": ""},
+                },
+            )
+            return result.modified_count > 0 or result.matched_count > 0
+        except Exception as exc:
+            logger.error("Set device pairing code hash error: %s", exc)
             return False
 
     async def get_device_by_token_hash(self, device_id: str, token_hash: str) -> Optional[Dict[str, Any]]:
@@ -1310,6 +1415,71 @@ class Database:
         except Exception as exc:
             logger.error("User query error: %s", exc)
             return None
+
+    async def list_admin_users(
+        self,
+        limit: int = 500,
+        user_id: Optional[str] = None,
+        phone_number: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List user accounts for admin screens."""
+        if self.users is None:
+            return []
+        try:
+            query: Dict[str, Any] = {}
+            if user_id:
+                query["user_id"] = {"$regex": re.escape(user_id), "$options": "i"}
+            if phone_number:
+                query["phone_number"] = {"$regex": re.escape(phone_number), "$options": "i"}
+            cursor = self.users.find(query).sort("created_at", -1).limit(limit)
+            return [self._serialize_doc(doc) async for doc in cursor]
+        except Exception as exc:
+            logger.error("List admin users error: %s", exc)
+            return []
+
+    async def delete_admin_user(self, user_id: str) -> Dict[str, int | bool]:
+        """Delete a user account and related access/session records."""
+        result = {
+            "deleted": False,
+            "device_links_deleted": 0,
+            "auth_sessions_deleted": 0,
+            "push_tokens_deleted": 0,
+            "owned_devices_updated": 0,
+        }
+        if self.users is None:
+            return result
+        try:
+            delete_result = await self.users.delete_one({"user_id": user_id})
+            result["deleted"] = delete_result.deleted_count > 0
+            if not result["deleted"]:
+                return result
+
+            if self.device_links is not None:
+                linked_devices = [
+                    doc["device_id"]
+                    async for doc in self.device_links.find({"user_id": user_id}, {"device_id": 1})
+                    if doc.get("device_id")
+                ]
+                links_result = await self.device_links.delete_many({"user_id": user_id})
+                result["device_links_deleted"] = int(links_result.deleted_count)
+                for device_id in sorted(set(linked_devices)):
+                    await self._sync_device_owner_cache(device_id)
+            if self.auth_sessions is not None:
+                sessions_result = await self.auth_sessions.delete_many({"user_id": user_id})
+                result["auth_sessions_deleted"] = int(sessions_result.deleted_count)
+            if self.push_tokens is not None:
+                tokens_result = await self.push_tokens.delete_many({"user_id": user_id})
+                result["push_tokens_deleted"] = int(tokens_result.deleted_count)
+            if self.devices is not None:
+                owned_result = await self.devices.update_many(
+                    {"owner_user_id": user_id},
+                    {"$unset": {"owner_user_id": ""}, "$set": {"updated_at": datetime.utcnow()}},
+                )
+                result["owned_devices_updated"] = int(owned_result.modified_count)
+            return result
+        except Exception as exc:
+            logger.error("Delete admin user error: %s", exc)
+            return result
 
     async def get_user_auth(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get raw user document including auth fields."""

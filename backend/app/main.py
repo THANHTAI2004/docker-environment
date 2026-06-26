@@ -7,10 +7,11 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, status, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 
@@ -45,6 +46,7 @@ from .api import auth_router, health_router, alerts_router, devices_router, user
 configure_logging(settings.log_json)
 logger = logging.getLogger(__name__)
 rate_limiter = RateLimiter()
+DEVICE_ADMIN_PAGE = Path(__file__).resolve().parent / "static" / "device-admin.html"
 
 
 def _request_id(request: Request) -> str:
@@ -257,6 +259,21 @@ app.include_router(devices_router)
 app.include_router(users_router)
 app.include_router(esp_router)
 app.include_router(push_router)
+
+
+@app.get("/", include_in_schema=False)
+async def device_admin_home_page():
+    return FileResponse(DEVICE_ADMIN_PAGE)
+
+
+@app.get("/device-admin", include_in_schema=False)
+async def device_admin_page():
+    return FileResponse(DEVICE_ADMIN_PAGE)
+
+
+@app.get("/device-admin/", include_in_schema=False)
+async def device_admin_page_slash():
+    return FileResponse(DEVICE_ADMIN_PAGE)
 
 
 # ===== Legacy Models =====

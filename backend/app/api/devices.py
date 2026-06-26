@@ -13,6 +13,7 @@ from ..models import (
     DeviceClaimRequest,
     DeviceLinkRequest,
     DeviceRegistration,
+    DeviceUpdate,
     DeviceViewerRequest,
     ThresholdsUpdate,
 )
@@ -164,6 +165,147 @@ async def register_device(
         }
     )
     return {"status": "success", "device_id": device.device_id, "pairing_code": pairing_code}
+
+
+@router.get("/admin/devices")
+async def list_registered_devices(
+    limit: int = Query(default=500, le=1000),
+    device_id: Optional[str] = Query(default=None),
+    linked_user_id: Optional[str] = Query(default=None),
+    _: dict = Depends(require_admin_user),
+):
+    """List all registered devices for admin management."""
+    items = await db.list_registered_devices(
+        limit=limit,
+        device_id=device_id.strip() if device_id else None,
+        linked_user_id=linked_user_id.strip() if linked_user_id else None,
+    )
+    return {"count": len(items), "items": items}
+
+
+@router.get("/admin/devices/{device_id}")
+async def get_registered_device_detail(
+    device_id: str,
+    _: dict = Depends(require_admin_user),
+):
+    """Return one registered device plus linked users."""
+    device = await db.get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    linked_users = await db.list_users_for_device(device_id)
+    return {"device": device, "linked_users": linked_users}
+
+
+@router.patch("/admin/devices/{device_id}")
+async def update_registered_device(
+    device_id: str,
+    payload: DeviceUpdate,
+    request: Request,
+    principal: dict = Depends(require_admin_user),
+):
+    """Update one registered device."""
+    fields = {key: value for key, value in payload.model_dump().items() if value is not None}
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields provided")
+    device = await db.update_registered_device(device_id, fields)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    await db.insert_audit_log(
+        {
+            "action": "device.admin.update",
+            "actor_id": principal["user_id"],
+            "actor_role": principal.get("role"),
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+            "details": {"updated_fields": sorted(fields.keys())},
+        }
+    )
+    return {"status": "success", "device": device}
+
+
+@router.delete("/admin/devices/{device_id}")
+async def delete_registered_device(
+    device_id: str,
+    request: Request,
+    principal: dict = Depends(require_admin_user),
+):
+    """Delete one registered device and related records."""
+    result = await db.delete_registered_device(device_id)
+    if not result.get("deleted"):
+        raise HTTPException(status_code=404, detail="Device not found")
+    await db.insert_audit_log(
+        {
+            "action": "device.admin.delete",
+            "actor_id": principal["user_id"],
+            "actor_role": principal.get("role"),
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+            "details": result,
+        }
+    )
+    return {"status": "deleted", "device_id": device_id, **result}
+
+
+@router.post("/admin/devices/{device_id}/pairing-code")
+async def rotate_admin_pairing_code(
+    device_id: str,
+    request: Request,
+    principal: dict = Depends(require_admin_user),
+):
+    """Generate and set a new pairing code for one registered device."""
+    device = await db.get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    pairing_code = _generate_pairing_code()
+    success = await db.set_device_pairing_code_hash(
+        device_id=device_id,
+        pairing_code_hash=hash_pairing_code(pairing_code),
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to set pairing code")
+    await db.insert_audit_log(
+        {
+            "action": "device.pairing_code.rotate",
+            "actor_id": principal["user_id"],
+            "actor_role": principal.get("role"),
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+        }
+    )
+    return {"device_id": device_id, "pairing_code": pairing_code}
+
+
+@router.delete("/admin/devices/{device_id}/linked-users/{user_id}")
+async def remove_admin_device_linked_user(
+    device_id: str,
+    user_id: str,
+    request: Request,
+    principal: dict = Depends(require_admin_user),
+):
+    """Remove one linked user from a registered device."""
+    device = await db.get_device(device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    link = await db.get_device_link(device_id, user_id)
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    success = await db.delete_device_link(device_id, user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Link not found")
+    await db.insert_audit_log(
+        {
+            "action": "device.admin.linked_user.remove",
+            "actor_id": principal["user_id"],
+            "actor_role": principal.get("role"),
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+            "details": {
+                "user_id": user_id,
+                "permission": _permission_of_link(link),
+            },
+        }
+    )
+    return {"status": "success", "device_id": device_id, "user_id": user_id}
 
 
 @router.post("/devices/{device_id}/links", deprecated=True)
@@ -417,7 +559,8 @@ async def rotate_esp_token(
     current_user: dict = Depends(require_current_user),
 ):
     """Generate and set new ESP token for a device (shown only once)."""
-    await require_device_owner(current_user, device_id)
+    if not current_user.get("is_system_admin"):
+        await require_device_owner(current_user, device_id)
 
     token = secrets.token_urlsafe(32)
     token_hash = hash_device_token(token)

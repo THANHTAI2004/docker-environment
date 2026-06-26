@@ -1,0 +1,1554 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Device Admin</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --login-bg: #102522;
+      --work-bg: #f4f7f6;
+      --surface: #ffffff;
+      --surface-2: #edf4f1;
+      --text: #17211f;
+      --muted: #63716d;
+      --line: #d8e2df;
+      --accent: #0f766e;
+      --accent-strong: #115e59;
+      --warn: #a16207;
+      --danger: #b91c1c;
+      --ink: #102522;
+      --focus: #f59e0b;
+      --shadow: 0 18px 46px rgba(16, 37, 34, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    body.login-mode {
+      background:
+        linear-gradient(135deg, rgba(16, 37, 34, 0.96), rgba(15, 118, 110, 0.88)),
+        radial-gradient(circle at 85% 18%, rgba(245, 158, 11, 0.18), transparent 30%),
+        var(--login-bg);
+    }
+
+    body.app-mode {
+      background: var(--work-bg);
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      font-size: 32px;
+      line-height: 1.12;
+    }
+
+    h2 {
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    h3 {
+      font-size: 15px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .login-screen {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(320px, 0.95fr) minmax(360px, 520px);
+    }
+
+    .login-visual {
+      color: #f7fffc;
+      padding: 46px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 36px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .mark {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: #f59e0b;
+      color: #102522;
+      font-weight: 850;
+    }
+
+    .login-copy {
+      max-width: 620px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .login-copy p {
+      max-width: 520px;
+      color: #c7d8d3;
+      font-size: 16px;
+    }
+
+    .login-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      max-width: 620px;
+    }
+
+    .stat {
+      min-height: 86px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.07);
+    }
+
+    .stat strong {
+      display: block;
+      color: #ffffff;
+      font-size: 20px;
+    }
+
+    .stat span {
+      color: #c7d8d3;
+      font-size: 13px;
+    }
+
+    .login-panel-wrap {
+      padding: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.86);
+      backdrop-filter: blur(12px);
+    }
+
+    .login-panel {
+      width: min(100%, 420px);
+      display: grid;
+      gap: 20px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 26px;
+    }
+
+    .login-panel header {
+      display: grid;
+      gap: 6px;
+    }
+
+    .app-screen {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .app-header {
+      background: #102522;
+      color: #f7fffc;
+      padding: 18px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .app-header .muted {
+      color: #bfd1cc;
+    }
+
+    .session-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .app-main {
+      padding: 24px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .api-strip {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      background: #e9f2ef;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .tab-bar {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .tab-button {
+      min-height: 38px;
+      border-radius: 6px 6px 0 0;
+      padding: 8px 14px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 760;
+      border: 1px solid transparent;
+      border-bottom: 0;
+    }
+
+    .tab-button.active {
+      background: var(--surface);
+      color: var(--accent-strong);
+      border-color: var(--line);
+    }
+
+    .tab-panel {
+      min-width: 0;
+    }
+
+    .work-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      min-width: 0;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel-head {
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 15px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-body {
+      padding: 18px;
+    }
+
+    .full {
+      grid-column: 1 / -1;
+    }
+
+    form {
+      display: grid;
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #ffffff;
+      color: var(--text);
+      padding: 10px 11px;
+      outline: none;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: var(--focus);
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .btn {
+      min-height: 40px;
+      border-radius: 6px;
+      padding: 9px 13px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 760;
+    }
+
+    .btn:hover {
+      background: var(--accent-strong);
+    }
+
+    .btn.secondary {
+      background: var(--surface-2);
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+
+    .btn.secondary:hover {
+      background: #dfeae6;
+    }
+
+    .btn.danger {
+      background: var(--danger);
+    }
+
+    .btn.slim {
+      min-height: 32px;
+      padding: 6px 10px;
+      font-size: 13px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: #e7f4f0;
+      color: #0f5f58;
+      font-size: 12px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .pill.warn {
+      background: #fff4dd;
+      color: var(--warn);
+    }
+
+    .pill.dark {
+      background: rgba(255, 255, 255, 0.12);
+      color: #f7fffc;
+    }
+
+    .error-box {
+      min-height: 0;
+      border-radius: 8px;
+      background: #fff4f2;
+      color: #9f1239;
+      padding: 10px 12px;
+      font-size: 13px;
+      border: 1px solid #fecdd3;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      min-width: 720px;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    code,
+    pre {
+      font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    pre {
+      margin: 0;
+      max-height: 320px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0f1f1c;
+      color: #e8f5f1;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 12px;
+    }
+
+    .result {
+      display: grid;
+      gap: 10px;
+    }
+
+    .token-line {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px;
+      border: 1px dashed #c5d4cf;
+      border-radius: 8px;
+      background: #fbf7ee;
+      color: #2d2617;
+      word-break: break-word;
+    }
+
+    .filter-bar {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(180px, 1fr)) auto auto;
+      gap: 10px;
+      align-items: end;
+      margin-bottom: 14px;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(16, 37, 34, 0.54);
+    }
+
+    .modal {
+      width: min(1080px, 100%);
+      max-height: min(86vh, 920px);
+      display: grid;
+      grid-template-rows: auto 1fr;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 28px 72px rgba(16, 37, 34, 0.28);
+      overflow: hidden;
+    }
+
+    .modal-head {
+      min-height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 15px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fbfa;
+    }
+
+    .modal-body {
+      padding: 18px;
+      overflow: auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .secret-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .secret-box {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbf7ee;
+      display: grid;
+      gap: 8px;
+    }
+
+    .secret-box strong {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .secret-value {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .secret-value code {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 8px 0;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(460px, calc(100vw - 36px));
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #102522;
+      color: #f5fbf9;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 160ms ease;
+      z-index: 20;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 980px) {
+      .login-screen {
+        grid-template-columns: 1fr;
+      }
+
+      .login-visual {
+        min-height: 42vh;
+      }
+
+      .work-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      h1 {
+        font-size: 26px;
+      }
+
+      .login-visual,
+      .login-panel-wrap,
+      .app-main {
+        padding: 18px;
+      }
+
+      .app-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .session-bar {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      .filter-bar,
+      .detail-grid,
+      .secret-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .login-stats,
+      .api-strip,
+      .row,
+      .token-line {
+        grid-template-columns: 1fr;
+      }
+
+      .panel-head {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .actions {
+        align-items: stretch;
+      }
+
+      .btn {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body class="login-mode">
+  <section class="login-screen" id="loginScreen">
+    <div class="login-visual">
+      <div class="brand">
+        <div class="mark">EC</div>
+        <div>
+          <h3>Eldercare</h3>
+          <p class="muted">Quản trị</p>
+        </div>
+      </div>
+
+      <div class="login-copy">
+        <h1>Đăng nhập quản trị thiết bị</h1>
+      </div>
+    </div>
+
+    <div class="login-panel-wrap">
+      <section class="login-panel">
+        <header>
+          <h2>Đăng nhập</h2>
+        </header>
+
+        <form id="loginForm">
+          <label>
+            Số điện thoại
+            <input id="phone" autocomplete="username" placeholder="+84911100401" required>
+          </label>
+          <label>
+            Mật khẩu
+            <input id="password" type="password" autocomplete="current-password" required>
+          </label>
+          <div class="error-box hidden" id="loginError"></div>
+          <button class="btn" type="submit">Đăng nhập</button>
+        </form>
+      </section>
+    </div>
+  </section>
+
+  <section class="app-screen hidden" id="appScreen">
+    <header class="app-header">
+      <div class="brand">
+        <div class="mark">EC</div>
+        <div>
+          <h2>Quản trị thiết bị</h2>
+        </div>
+      </div>
+      <div class="session-bar">
+        <span class="pill dark" id="authState">Đã đăng nhập</span>
+        <span class="pill dark" id="sessionUser">-</span>
+        <button class="btn secondary slim" id="reloadSession" type="button">Tải lại</button>
+        <button class="btn danger slim" id="logoutBtn" type="button">Đăng xuất</button>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <div class="tab-bar" role="tablist">
+        <button class="tab-button active" id="devicesTabButton" type="button" data-tab-target="devicesTab">Thiết bị</button>
+        <button class="tab-button" id="accountsTabButton" type="button" data-tab-target="accountsTab">Tài khoản</button>
+      </div>
+
+      <div class="tab-panel" id="devicesTab">
+        <div class="work-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>Register thiết bị</h3>
+          </div>
+          <div class="panel-body">
+            <form id="registerForm">
+              <label>
+                Device ID
+                <input id="regDeviceId" placeholder="dev-new-001" required>
+              </label>
+              <div class="row">
+                <label>
+                  Tên thiết bị
+                  <input id="regDeviceName" placeholder="Thiết bị 001">
+                </label>
+                <label>
+                  Firmware
+                  <input id="regFirmware" placeholder="1.0.0">
+                </label>
+              </div>
+              <label>
+                Pairing code tùy chọn
+                <input id="regPairingCode" placeholder="Để trống để backend tự tạo">
+              </label>
+              <div class="token-line hidden" id="registerResult"></div>
+              <button class="btn" type="submit">Thêm thiết bị</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h3>ESP token</h3>
+          </div>
+          <div class="panel-body">
+            <form id="tokenForm">
+              <label>
+                Device ID
+                <input id="tokenDeviceId" placeholder="dev-new-001" required>
+              </label>
+              <div class="token-line hidden" id="tokenResult"></div>
+              <button class="btn" type="submit">Tạo token</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel full">
+          <div class="panel-head">
+            <h3>Thiết bị đã đăng ký</h3>
+            <div class="actions">
+              <button class="btn secondary slim" id="refreshRegisteredDevices" type="button">Làm mới</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <form class="filter-bar" id="deviceSearchForm">
+              <label>
+                Device ID
+                <input id="searchDeviceId" placeholder="dev-001">
+              </label>
+              <label>
+                User ID liên kết
+                <input id="searchLinkedUserId" placeholder="user-xxxx">
+              </label>
+              <button class="btn" type="submit">Tìm kiếm</button>
+              <button class="btn secondary" id="clearDeviceSearch" type="button">Xóa lọc</button>
+            </form>
+            <div class="table-wrap" id="registeredDevicesTable"></div>
+          </div>
+        </section>
+        </div>
+      </div>
+
+      <div class="tab-panel hidden" id="accountsTab">
+        <section class="panel full">
+          <div class="panel-head">
+            <h3>Người dùng</h3>
+            <div class="actions">
+              <button class="btn secondary slim" id="refreshUsers" type="button">Làm mới</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <form class="filter-bar" id="userSearchForm">
+              <label>
+                User ID
+                <input id="searchUserId" placeholder="user-xxxx">
+              </label>
+              <label>
+                Số điện thoại
+                <input id="searchUserPhone" placeholder="+849...">
+              </label>
+              <button class="btn" type="submit">Tìm kiếm</button>
+              <button class="btn secondary" id="clearUserSearch" type="button">Xóa lọc</button>
+            </form>
+            <div class="table-wrap" id="usersTable"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </section>
+
+  <div class="modal-backdrop hidden" id="deviceDetailModal">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="deviceDetailTitle">
+      <div class="modal-head">
+        <h3 id="deviceDetailTitle">Chi tiết thiết bị</h3>
+        <div class="actions">
+          <button class="btn danger slim" id="deleteDeviceBtn" type="button">Xóa thiết bị</button>
+          <button class="btn secondary slim" id="closeDeviceDetail" type="button">Đóng</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="secret-grid" id="deviceSecretPanel"></div>
+        <div class="detail-grid">
+          <form id="deviceEditForm">
+            <label>
+              Device ID
+              <input id="editDeviceId" readonly>
+            </label>
+            <div class="row">
+              <label>
+                Tên thiết bị
+                <input id="editDeviceName">
+              </label>
+              <label>
+                Firmware
+                <input id="editFirmware">
+              </label>
+            </div>
+            <label>
+              Trạng thái
+              <select id="editStatus">
+                <option value="active">active</option>
+                <option value="inactive">inactive</option>
+                <option value="maintenance">maintenance</option>
+              </select>
+            </label>
+            <button class="btn" type="submit">Lưu thay đổi</button>
+          </form>
+          <div>
+            <h3>Người đang truy cập</h3>
+            <div class="table-wrap" id="linkedUsersTable"></div>
+          </div>
+        </div>
+        <pre id="deviceDetailJson">{}</pre>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const DEVICE_TYPE = "chest";
+    const state = {
+      token: localStorage.getItem("deviceAdmin.accessToken") || "",
+      userId: localStorage.getItem("deviceAdmin.userId") || "",
+      expiresAt: localStorage.getItem("deviceAdmin.expiresAt") || "",
+      deviceSecrets: JSON.parse(localStorage.getItem("deviceAdmin.deviceSecrets") || "{}"),
+      selectedDeviceId: "",
+      searchDeviceId: "",
+      searchLinkedUserId: "",
+      searchUserId: "",
+      searchUserPhone: "",
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function setBusy(form, busy) {
+      form.querySelectorAll("button, input, select").forEach((el) => {
+        el.disabled = busy;
+      });
+    }
+
+    function toast(message) {
+      const node = $("toast");
+      node.textContent = message;
+      node.classList.add("show");
+      window.clearTimeout(toast.timer);
+      toast.timer = window.setTimeout(() => node.classList.remove("show"), 2600);
+    }
+
+    function showLoginError(message) {
+      const node = $("loginError");
+      if (!message) {
+        node.classList.add("hidden");
+        node.textContent = "";
+        return;
+      }
+      node.textContent = message;
+      node.classList.remove("hidden");
+    }
+
+    function setView(isLoggedIn) {
+      $("loginScreen").classList.toggle("hidden", isLoggedIn);
+      $("appScreen").classList.toggle("hidden", !isLoggedIn);
+      document.body.classList.toggle("login-mode", !isLoggedIn);
+      document.body.classList.toggle("app-mode", isLoggedIn);
+    }
+
+    function apiUrl(path) {
+      const base = window.location.origin.replace(/\/+$/, "");
+      return `${base}${path}`;
+    }
+
+    async function request(path, options = {}) {
+      const headers = {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      };
+      if (state.token) {
+        headers.Authorization = `Bearer ${state.token}`;
+      }
+      const response = await fetch(apiUrl(path), { ...options, headers });
+      const contentType = response.headers.get("content-type") || "";
+      const body = contentType.includes("application/json")
+        ? await response.json()
+        : await response.text();
+      if (!response.ok) {
+        const message = body && body.message ? body.message : `HTTP ${response.status}`;
+        const error = new Error(message);
+        error.body = body;
+        throw error;
+      }
+      return body;
+    }
+
+    async function copyText(value) {
+      await navigator.clipboard.writeText(value);
+      toast("Đã copy");
+    }
+
+    function showInlineValue(targetId, label, value) {
+      const target = $(targetId);
+      if (!value) {
+        target.classList.add("hidden");
+        target.innerHTML = "";
+        return;
+      }
+      target.classList.remove("hidden");
+      target.innerHTML = `<div><strong>${label}</strong><br><code>${value}</code></div>`;
+      const button = document.createElement("button");
+      button.className = "btn secondary slim";
+      button.type = "button";
+      button.textContent = "Copy";
+      button.addEventListener("click", () => copyText(value));
+      target.append(button);
+    }
+
+    function rememberDeviceSecret(deviceId, fields) {
+      if (!deviceId) return;
+      state.deviceSecrets[deviceId] = {
+        ...(state.deviceSecrets[deviceId] || {}),
+        ...fields,
+      };
+      localStorage.setItem("deviceAdmin.deviceSecrets", JSON.stringify(state.deviceSecrets));
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function updateSession() {
+      $("sessionUser").textContent = state.userId || "-";
+      $("authState").textContent = state.token ? "Đã đăng nhập" : "Chưa đăng nhập";
+      setView(Boolean(state.token));
+    }
+
+    function saveSession(data) {
+      state.token = data.access_token || "";
+      state.userId = data.user_id || "";
+      state.expiresAt = data.expires_at || "";
+      localStorage.setItem("deviceAdmin.accessToken", state.token);
+      localStorage.setItem("deviceAdmin.userId", state.userId);
+      localStorage.setItem("deviceAdmin.expiresAt", state.expiresAt);
+      updateSession();
+    }
+
+    async function requireAdminSession() {
+      const profile = await request("/api/v1/auth/me");
+      if (profile.role !== "admin") {
+        try {
+          await request("/api/v1/auth/logout", { method: "POST" });
+        } catch (_) {
+          // The token may already be unusable; local cleanup still matters.
+        }
+        clearSession();
+        throw new Error("Tài khoản này không có quyền admin");
+      }
+      return profile;
+    }
+
+    function clearSession() {
+      state.token = "";
+      state.userId = "";
+      state.expiresAt = "";
+      state.selectedDeviceId = "";
+      localStorage.removeItem("deviceAdmin.accessToken");
+      localStorage.removeItem("deviceAdmin.userId");
+      localStorage.removeItem("deviceAdmin.expiresAt");
+      updateSession();
+      renderRegisteredDevices([]);
+      renderUsers([]);
+      closeDeviceDetail();
+    }
+
+    function applyDeviceId(deviceId) {
+      $("tokenDeviceId").value = deviceId;
+    }
+
+    function renderLinkedUsers(items) {
+      const target = $("linkedUsersTable");
+      if (!items || items.length === 0) {
+        target.innerHTML = '<div class="empty">Chưa có người dùng liên kết.</div>';
+        return;
+      }
+      target.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>User ID</th>
+              <th>Tên</th>
+              <th>Số điện thoại</th>
+              <th>Quyền</th>
+              <th>Ngày liên kết</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      `;
+      const tbody = target.querySelector("tbody");
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td><code>${escapeHtml(item.user_id)}</code></td>
+          <td>${escapeHtml(item.name)}</td>
+          <td>${escapeHtml(item.phone_number)}</td>
+          <td>${escapeHtml(item.permission || item.link_role)}</td>
+          <td>${escapeHtml(item.linked_at || item.created_at)}</td>
+          <td class="actions">
+            <button class="btn danger slim" type="button" data-action="remove-linked-user">Xóa</button>
+          </td>
+        `;
+        row.querySelector('[data-action="remove-linked-user"]').addEventListener("click", async () => {
+          const deviceId = state.selectedDeviceId;
+          if (!deviceId || !item.user_id) return;
+          if (!window.confirm(`Xóa quyền truy cập của ${item.user_id} khỏi thiết bị ${deviceId}?`)) return;
+          try {
+            await request(`/api/v1/admin/devices/${encodeURIComponent(deviceId)}/linked-users/${encodeURIComponent(item.user_id)}`, {
+              method: "DELETE",
+            });
+            await Promise.all([loadDeviceDetail(deviceId), loadRegisteredDevices()]);
+            toast("Đã xóa người truy cập");
+          } catch (error) {
+            toast(error.message || "Không xóa được người truy cập");
+          }
+        });
+        tbody.append(row);
+      });
+    }
+
+    function secretBox(deviceId, key, label) {
+      const value = state.deviceSecrets[deviceId] && state.deviceSecrets[deviceId][key];
+      const copyButton = value
+        ? `<button class="btn secondary slim" type="button" data-secret-copy="${key}">Copy</button>`
+        : "";
+      const rotateText = key === "pairingCode" ? "Tạo lại" : "Tạo token";
+      return `
+        <div class="secret-box">
+          <strong>${label}</strong>
+          <div class="secret-value">
+            <code>${escapeHtml(value || "Chưa tạo trong phiên này")}</code>
+            ${copyButton}
+            <button class="btn slim" type="button" data-secret-rotate="${key}">${rotateText}</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDeviceSecrets(deviceId) {
+      const target = $("deviceSecretPanel");
+      target.innerHTML = `
+        ${secretBox(deviceId, "pairingCode", "Pairing code")}
+        ${secretBox(deviceId, "espToken", "ESP token")}
+      `;
+      target.querySelectorAll("[data-secret-copy]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const key = button.getAttribute("data-secret-copy");
+          const value = state.deviceSecrets[deviceId] && state.deviceSecrets[deviceId][key];
+          if (value) copyText(value);
+        });
+      });
+      target.querySelectorAll("[data-secret-rotate]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const key = button.getAttribute("data-secret-rotate");
+          await rotateDeviceSecret(deviceId, key, button);
+        });
+      });
+    }
+
+    async function rotateDeviceSecret(deviceId, key, button) {
+      if (!deviceId) return;
+      button.disabled = true;
+      try {
+        if (key === "pairingCode") {
+          const data = await request(`/api/v1/admin/devices/${encodeURIComponent(deviceId)}/pairing-code`, {
+            method: "POST",
+          });
+          rememberDeviceSecret(deviceId, { pairingCode: data.pairing_code });
+          toast("Đã tạo Pairing code");
+        } else if (key === "espToken") {
+          const data = await request(`/api/v1/devices/${encodeURIComponent(deviceId)}/esp-token`, {
+            method: "POST",
+          });
+          rememberDeviceSecret(deviceId, { espToken: data.esp_token });
+          toast("Đã tạo ESP token");
+        }
+        renderDeviceSecrets(deviceId);
+      } catch (error) {
+        toast(error.message || "Không tạo được mã");
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function openDeviceDetail() {
+      $("deviceDetailModal").classList.remove("hidden");
+    }
+
+    function closeDeviceDetail() {
+      $("deviceDetailModal").classList.add("hidden");
+    }
+
+    function activateTab(tabId) {
+      ["devicesTab", "accountsTab"].forEach((id) => {
+        $(id).classList.toggle("hidden", id !== tabId);
+      });
+      document.querySelectorAll("[data-tab-target]").forEach((button) => {
+        button.classList.toggle("active", button.getAttribute("data-tab-target") === tabId);
+      });
+      if (tabId === "accountsTab" && state.token) {
+        loadUsers().catch((error) => toast(error.message || "Không tải được tài khoản"));
+      }
+    }
+
+    function renderDeviceDetail(data) {
+      const device = data.device || {};
+      state.selectedDeviceId = device.device_id || "";
+      openDeviceDetail();
+      $("editDeviceId").value = device.device_id || "";
+      $("editDeviceName").value = device.device_name || "";
+      $("editFirmware").value = device.firmware_version || "";
+      $("editStatus").value = device.status || "";
+      renderDeviceSecrets(device.device_id || "");
+      renderLinkedUsers(data.linked_users || []);
+      $("deviceDetailJson").textContent = JSON.stringify(device, null, 2);
+      applyDeviceId(device.device_id || "");
+    }
+
+    async function loadDeviceDetail(deviceId) {
+      const data = await request(`/api/v1/admin/devices/${encodeURIComponent(deviceId)}`);
+      renderDeviceDetail(data);
+    }
+
+    function renderRegisteredDevices(items) {
+      const target = $("registeredDevicesTable");
+      if (!items || items.length === 0) {
+        target.innerHTML = '<div class="empty">Chưa có thiết bị nào.</div>';
+        return;
+      }
+
+      target.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Device ID</th>
+              <th>Tên</th>
+              <th>Firmware</th>
+              <th>Trạng thái</th>
+              <th>Owner</th>
+              <th>Ngày đăng ký</th>
+              <th>Lần cuối</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      `;
+      const tbody = target.querySelector("tbody");
+      items.forEach((item) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td><code>${escapeHtml(item.device_id)}</code></td>
+          <td>${escapeHtml(item.device_name)}</td>
+          <td>${escapeHtml(item.firmware_version)}</td>
+          <td>${escapeHtml(item.status)}</td>
+          <td>${escapeHtml(item.owner_user_id)}</td>
+          <td>${escapeHtml(item.registered_at)}</td>
+          <td>${escapeHtml(item.last_seen)}</td>
+          <td class="actions">
+            <button class="btn secondary slim" type="button" data-action="select">Chọn</button>
+            <button class="btn secondary slim" type="button" data-action="detail">Chi tiết</button>
+          </td>
+        `;
+        row.querySelector('[data-action="select"]').addEventListener("click", () => {
+          applyDeviceId(item.device_id);
+          toast("Đã chọn thiết bị");
+        });
+        row.querySelector('[data-action="detail"]').addEventListener("click", async () => {
+          try {
+            await loadDeviceDetail(item.device_id);
+            toast("Đã tải chi tiết");
+          } catch (error) {
+            toast(error.message || "Không tải được chi tiết");
+          }
+        });
+        tbody.append(row);
+      });
+    }
+
+    async function loadRegisteredDevices() {
+      if (!state.token) {
+        renderRegisteredDevices([]);
+        return;
+      }
+      const params = new URLSearchParams();
+      if (state.searchDeviceId) params.set("device_id", state.searchDeviceId);
+      if (state.searchLinkedUserId) params.set("linked_user_id", state.searchLinkedUserId);
+      const path = params.toString() ? `/api/v1/admin/devices?${params.toString()}` : "/api/v1/admin/devices";
+      const data = await request(path);
+      renderRegisteredDevices(data.items || []);
+    }
+
+    function renderUsers(items) {
+      const target = $("usersTable");
+      if (!items || items.length === 0) {
+        target.innerHTML = '<div class="empty">Chưa có người dùng nào.</div>';
+        return;
+      }
+      target.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>User ID</th>
+              <th>Tên</th>
+              <th>Số điện thoại</th>
+              <th>Vai trò</th>
+              <th>Trạng thái</th>
+              <th>Ngày tạo</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      `;
+      const tbody = target.querySelector("tbody");
+      items.forEach((item) => {
+        const isCurrentUser = item.user_id === state.userId;
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td><code>${escapeHtml(item.user_id)}</code></td>
+          <td>${escapeHtml(item.name)}</td>
+          <td>${escapeHtml(item.phone_number || item.phone)}</td>
+          <td>${escapeHtml(item.role || "user")}</td>
+          <td>${item.is_active === false ? "inactive" : "active"}</td>
+          <td>${escapeHtml(item.created_at)}</td>
+          <td class="actions">
+            <button class="btn danger slim" type="button" data-action="delete" ${isCurrentUser ? "disabled" : ""}>Xóa</button>
+          </td>
+        `;
+        const deleteButton = row.querySelector('[data-action="delete"]');
+        deleteButton.addEventListener("click", async () => {
+          if (!window.confirm(`Xóa người dùng ${item.user_id}?`)) return;
+          try {
+            await request(`/api/v1/admin/users/${encodeURIComponent(item.user_id)}`, {
+              method: "DELETE",
+            });
+            await Promise.all([loadUsers(), loadRegisteredDevices()]);
+            toast("Đã xóa người dùng");
+          } catch (error) {
+            toast(error.message || "Không xóa được người dùng");
+          }
+        });
+        tbody.append(row);
+      });
+    }
+
+    async function loadUsers() {
+      if (!state.token) {
+        renderUsers([]);
+        return;
+      }
+      const params = new URLSearchParams();
+      if (state.searchUserId) params.set("user_id", state.searchUserId);
+      if (state.searchUserPhone) params.set("phone_number", state.searchUserPhone);
+      const path = params.toString() ? `/api/v1/admin/users?${params.toString()}` : "/api/v1/admin/users";
+      const data = await request(path);
+      renderUsers(data.items || []);
+    }
+
+    $("loginForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      setBusy(form, true);
+      showLoginError("");
+      try {
+        const data = await request("/api/v1/auth/login", {
+          method: "POST",
+          body: JSON.stringify({
+            phone_number: $("phone").value.trim(),
+            password: $("password").value,
+          }),
+        });
+        saveSession(data);
+        await requireAdminSession();
+        await Promise.all([loadRegisteredDevices(), loadUsers()]);
+        toast("Đăng nhập thành công");
+      } catch (error) {
+        clearSession();
+        showLoginError(error.message || "Đăng nhập thất bại");
+      } finally {
+        setBusy(form, false);
+      }
+    });
+
+    $("logoutBtn").addEventListener("click", async () => {
+      if (state.token) {
+        try {
+          await request("/api/v1/auth/logout", { method: "POST" });
+        } catch (_) {
+          // Local logout still clears an expired or revoked session.
+        }
+      }
+      clearSession();
+    });
+
+    $("reloadSession").addEventListener("click", async () => {
+      try {
+        await requireAdminSession();
+        await Promise.all([loadRegisteredDevices(), loadUsers()]);
+        toast("Phiên còn hợp lệ");
+      } catch (error) {
+        clearSession();
+        showLoginError(error.message || "Phiên đăng nhập không hợp lệ");
+      }
+    });
+
+    $("registerForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      setBusy(form, true);
+      try {
+        const payload = {
+          device_id: $("regDeviceId").value.trim(),
+          device_type: DEVICE_TYPE,
+        };
+        if ($("regDeviceName").value.trim()) payload.device_name = $("regDeviceName").value.trim();
+        if ($("regFirmware").value.trim()) payload.firmware_version = $("regFirmware").value.trim();
+        if ($("regPairingCode").value.trim()) payload.pairing_code = $("regPairingCode").value.trim();
+        const data = await request("/api/v1/devices/register", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        $("tokenDeviceId").value = data.device_id || payload.device_id;
+        rememberDeviceSecret(data.device_id || payload.device_id, { pairingCode: data.pairing_code });
+        showInlineValue("registerResult", "Pairing code", data.pairing_code);
+        await loadRegisteredDevices();
+        toast("Đã thêm thiết bị");
+      } catch (error) {
+        showInlineValue("registerResult", "Lỗi", error.message);
+      } finally {
+        setBusy(form, false);
+      }
+    });
+
+    $("tokenForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const deviceId = $("tokenDeviceId").value.trim();
+      setBusy(form, true);
+      try {
+        const data = await request(`/api/v1/devices/${encodeURIComponent(deviceId)}/esp-token`, {
+          method: "POST",
+        });
+        rememberDeviceSecret(deviceId, { espToken: data.esp_token });
+        showInlineValue("tokenResult", "ESP token", data.esp_token);
+        await loadRegisteredDevices();
+        toast("Đã tạo ESP token");
+      } catch (error) {
+        showInlineValue("tokenResult", "Lỗi", error.message);
+      } finally {
+        setBusy(form, false);
+      }
+    });
+
+    $("deviceEditForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const deviceId = state.selectedDeviceId;
+      if (!deviceId) return;
+      setBusy(form, true);
+      try {
+        const payload = {
+          device_name: $("editDeviceName").value.trim(),
+          firmware_version: $("editFirmware").value.trim(),
+          status: $("editStatus").value,
+        };
+        const data = await request(`/api/v1/admin/devices/${encodeURIComponent(deviceId)}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+        await loadRegisteredDevices();
+        await loadDeviceDetail(data.device.device_id);
+        toast("Đã lưu thay đổi");
+      } catch (error) {
+        toast(error.message || "Không lưu được");
+      } finally {
+        setBusy(form, false);
+      }
+    });
+
+    $("deleteDeviceBtn").addEventListener("click", async () => {
+      const deviceId = state.selectedDeviceId;
+      if (!deviceId) return;
+      if (!window.confirm(`Xóa thiết bị ${deviceId}?`)) return;
+      try {
+        await request(`/api/v1/admin/devices/${encodeURIComponent(deviceId)}`, {
+          method: "DELETE",
+        });
+        delete state.deviceSecrets[deviceId];
+        localStorage.setItem("deviceAdmin.deviceSecrets", JSON.stringify(state.deviceSecrets));
+        state.selectedDeviceId = "";
+        closeDeviceDetail();
+        $("tokenDeviceId").value = "";
+        await loadRegisteredDevices();
+        toast("Đã xóa thiết bị");
+      } catch (error) {
+        toast(error.message || "Không xóa được");
+      }
+    });
+
+    $("closeDeviceDetail").addEventListener("click", () => {
+      closeDeviceDetail();
+    });
+
+    $("deviceDetailModal").addEventListener("click", (event) => {
+      if (event.target === event.currentTarget) {
+        closeDeviceDetail();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeDeviceDetail();
+      }
+    });
+
+    $("deviceSearchForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      state.searchDeviceId = $("searchDeviceId").value.trim();
+      state.searchLinkedUserId = $("searchLinkedUserId").value.trim();
+      try {
+        await loadRegisteredDevices();
+        toast("Đã tìm kiếm");
+      } catch (error) {
+        toast(error.message || "Không tìm được");
+      }
+    });
+
+    $("clearDeviceSearch").addEventListener("click", async () => {
+      $("searchDeviceId").value = "";
+      $("searchLinkedUserId").value = "";
+      state.searchDeviceId = "";
+      state.searchLinkedUserId = "";
+      try {
+        await loadRegisteredDevices();
+        toast("Đã xóa lọc");
+      } catch (error) {
+        toast(error.message || "Không tải được danh sách");
+      }
+    });
+
+    $("userSearchForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      state.searchUserId = $("searchUserId").value.trim();
+      state.searchUserPhone = $("searchUserPhone").value.trim();
+      try {
+        await loadUsers();
+        toast("Đã tìm kiếm người dùng");
+      } catch (error) {
+        toast(error.message || "Không tìm được người dùng");
+      }
+    });
+
+    $("clearUserSearch").addEventListener("click", async () => {
+      $("searchUserId").value = "";
+      $("searchUserPhone").value = "";
+      state.searchUserId = "";
+      state.searchUserPhone = "";
+      try {
+        await loadUsers();
+        toast("Đã xóa lọc người dùng");
+      } catch (error) {
+        toast(error.message || "Không tải được người dùng");
+      }
+    });
+
+    $("refreshUsers").addEventListener("click", async () => {
+      try {
+        await loadUsers();
+        toast("Đã làm mới người dùng");
+      } catch (error) {
+        toast(error.message || "Không tải được người dùng");
+      }
+    });
+
+    document.querySelectorAll("[data-tab-target]").forEach((button) => {
+      button.addEventListener("click", () => {
+        activateTab(button.getAttribute("data-tab-target"));
+      });
+    });
+
+    $("refreshRegisteredDevices").addEventListener("click", async () => {
+      try {
+        await loadRegisteredDevices();
+        toast("Đã làm mới");
+      } catch (error) {
+        toast(error.message || "Không tải được danh sách");
+      }
+    });
+
+    updateSession();
+    renderRegisteredDevices([]);
+    renderUsers([]);
+    if (state.token) {
+      requireAdminSession()
+        .then(() => Promise.all([loadRegisteredDevices(), loadUsers()]))
+        .catch((error) => {
+          clearSession();
+          showLoginError(error.message || "Phiên đăng nhập không hợp lệ");
+        });
+    }
+  </script>
+</body>
+</html>

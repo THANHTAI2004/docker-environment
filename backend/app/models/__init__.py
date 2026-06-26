@@ -9,6 +9,7 @@ from .device import (
     DeviceDB,
     DeviceRegistration,
     DeviceSettings,
+    DeviceUpdate,
 )
 from .link import DeviceCaregiverRequest, DeviceLink, DeviceLinkDB, DeviceLinkRequest, DeviceViewerRequest
 from .user import User, UserDB, UserCreate, ThresholdsUpdate, AlertThresholds
@@ -37,6 +38,7 @@ __all__ = [
     "DeviceDB",
     "DeviceRegistration",
     "DeviceSettings",
+    "DeviceUpdate",
     "DeviceLink",
     "DeviceLinkDB",
     "DeviceLinkRequest",
