@@ -834,3 +834,45 @@ async def get_public_device_summary(
     """Authenticated summary alias kept for backward compatibility."""
     logger.warning("Deprecated public device summary endpoint used for device=%s", device_id)
     return await _build_device_summary(device_id, period, current_user)
+
+
+@router.delete("/devices/{device_id}/claim")
+async def delete_owner_device_claim(
+    device_id: str,
+    request: Request,
+    current_user: dict = Depends(require_current_user),
+):
+    """Allow device owner to unclaim/unlink their own device."""
+    await require_device_owner(current_user, device_id)
+
+    link = await db.get_device_link(device_id, current_user["user_id"])
+    if not link:
+        raise HTTPException(status_code=404, detail="Device link not found")
+
+    permission = _permission_of_link(link)
+    if permission != "owner":
+        raise HTTPException(status_code=403, detail="Only owner can unclaim this device")
+
+    success = await db.delete_device_link(device_id, current_user["user_id"])
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to unclaim device")
+
+    await db.insert_audit_log(
+        {
+            "action": "device.claim.delete",
+            "actor_id": current_user["user_id"],
+            "actor_role": current_user.get("role"),
+            "target_id": device_id,
+            "request_id": request.state.request_id,
+            "details": {
+                "permission": "owner",
+                "result": "owner_link_removed",
+            },
+        }
+    )
+
+    return {
+        "status": "success",
+        "device_id": device_id,
+        "message": "Device owner link removed",
+    }
